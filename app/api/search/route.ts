@@ -2,6 +2,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import axios from 'axios';
 
+export const runtime = 'nodejs';
+
 // Tavily API - AI-optimized search engine
 // Get your API key from: https://tavily.com
 const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
@@ -41,11 +43,11 @@ export async function POST(request: NextRequest) {
           {
             api_key: TAVILY_API_KEY,
             query: query,
-            search_depth: 'advanced', // 'basic' or 'advanced'
+            search_depth: 'basic', // 'basic' or 'advanced'
             include_answer: true, // Get AI-generated answer
             include_images: false,
             include_raw_content: false,
-            max_results: 5,
+            max_results: 3, // Limit to top 3 results
             include_domains: [], // Optional: limit to specific domains
             exclude_domains: [], // Optional: exclude specific domains
           },
@@ -278,37 +280,5 @@ export async function POST(request: NextRequest) {
       { error: errorMessage },
       { status: error.response?.status || 500 }
     );
-  }
-}
-
-// Helper function to perform standalone Tavily search
-export async function performTavilySearch(query: string, options?: {
-  searchDepth?: 'basic' | 'advanced';
-  maxResults?: number;
-  includeDomains?: string[];
-  excludeDomains?: string[];
-}) {
-  if (!TAVILY_API_KEY) {
-    throw new Error('Tavily API key not configured');
-  }
-
-  try {
-    const response = await axios.post(
-      'https://api.tavily.com/search',
-      {
-        api_key: TAVILY_API_KEY,
-        query: query,
-        search_depth: options?.searchDepth || 'basic',
-        include_answer: true,
-        max_results: options?.maxResults || 5,
-        include_domains: options?.includeDomains || [],
-        exclude_domains: options?.excludeDomains || [],
-      }
-    );
-
-    return response.data;
-  } catch (error) {
-    console.error('Tavily search error:', error);
-    throw error;
   }
 }
