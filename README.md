@@ -26,6 +26,18 @@ cd digital-strategy
 npm install
 ```
 
+
+First time github setup
+
+echo "# digital-strategy" >> README.md
+git init
+git add README.md
+git commit -m "first commit"
+git branch -M main
+git remote add origin https://github.com/abhirupbanerjee/digital-strategy.git
+git push -u origin main
+
+
 ---
 
 ## 🧩 Dependencies

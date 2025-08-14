@@ -287,7 +287,7 @@ const ChatApp = () => {
   // Copy chat to clipboard
   const copyChatToClipboard = async () => {
     const chatText = messages
-      .map((msg) => `${msg.timestamp} - ${msg.role === "user" ? "You" : msg.role === "system" ? "System" : "Grenada AI Assistant"}:\n${msg.content}`)
+      .map((msg) => `${msg.timestamp} - ${msg.role === "user" ? "You" : msg.role === "system" ? "System" : "Digital Strategy Assistant"}:\n${msg.content}`)
       .join("\n\n");
     try {
       await navigator.clipboard.writeText(chatText);
@@ -313,7 +313,7 @@ const ChatApp = () => {
       {/* Header */}
       <header className="flex items-center justify-center w-full p-4 bg-white shadow-md">
         <img src="/icon.png" alt="Icon" className="h-12 w-12 sm:h-16 sm:w-16" />
-        <h2 className="text-xl sm:text-2xl font-bold ml-2">Grenada AI Assistant</h2>
+        <h2 className="text-xl sm:text-2xl font-bold ml-2">Digital Strategy Assistant</h2>
       </header>
 
       {/* Chat Container */}
@@ -325,7 +325,7 @@ const ChatApp = () => {
           {messages.map((msg, index) => (
             <motion.div key={index}>
               <p className="font-bold mb-1">
-                {msg.role === "user" ? "You" : msg.role === "system" ? "System" : "Grenada AI Assistant"}{" "}
+                {msg.role === "user" ? "You" : msg.role === "system" ? "System" : "Digital Strategy Assistant"}{" "}
                 {msg.timestamp && (
                   <span className="text-xs text-gray-500">({msg.timestamp})</span>
                 )}
