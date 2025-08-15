@@ -1,28 +1,12 @@
 // app/api/threads/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseServer } from '@/lib/supabase-server';
+import { createClient } from '@supabase/supabase-js';
 
-export async function POST(request: NextRequest) {
-  const { threadId, projectId, title } = await request.json();
-  
-  // Just store the reference - no messages
-  const { data, error } = await supabaseServer
-    .from('threads')
-    .upsert({
-      id: threadId,  // OpenAI thread ID
-      project_id: projectId,
-      title: title || 'New Chat',
-      last_activity: new Date().toISOString(),
-      message_count: 1
-    })
-    .select()
-    .single();
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_KEY!
+);
 
-  if (error) return NextResponse.json({ error }, { status: 500 });
-  return NextResponse.json(data);
-}
-
-// Load thread messages from OpenAI
 export async function GET(request: NextRequest) {
   const threadId = request.nextUrl.searchParams.get('threadId');
   
@@ -31,7 +15,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Get thread metadata from Supabase
-  const { data: threadData } = await supabaseServer
+  const { data: threadData } = await supabase
     .from('threads')
     .select('*, project:projects(*)')
     .eq('id', threadId)
@@ -53,9 +37,28 @@ export async function GET(request: NextRequest) {
     
     return NextResponse.json({
       thread: threadData,
-      messages: messages.data
+      messages: messages.data || []
     });
   } catch (error) {
     return NextResponse.json({ error: 'Failed to load messages' }, { status: 500 });
   }
+}
+
+export async function POST(request: NextRequest) {
+  const body = await request.json();
+  
+  const { data, error } = await supabase
+    .from('threads')
+    .upsert({
+      id: body.id,
+      project_id: body.projectId,
+      title: body.title || 'New Chat',
+      last_activity: new Date().toISOString(),
+      message_count: body.messages?.length || 0
+    })
+    .select()
+    .single();
+
+  if (error) return NextResponse.json({ error }, { status: 500 });
+  return NextResponse.json(data);
 }

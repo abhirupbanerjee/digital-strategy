@@ -69,13 +69,20 @@ const ChatApp = () => {
 
   // Initial load from API
   useEffect(() => {
-    // Load projects
-    fetch('/api/projects')
-      .then(res => res.json())
-      .then(data => setProjects(data.projects || []))
-      .catch(err => console.error('Error loading projects:', err));
-    // Optionally load threads/messages for default project/thread
-  }, []);
+  fetch('/api/projects')
+    .then(res => res.json())
+    .then(data => {
+      // Even if no projects, show sidebar on desktop
+      setProjects(data.projects || []);
+      // Auto-create first project if none exist
+      if (!data.projects || data.projects.length === 0) {
+        // Optional: Create default project
+        createProject();
+      }
+    })
+    .catch(err => console.error('Error loading projects:', err));
+}, []);
+
 
   // Scroll to bottom when messages change
   useEffect(() => {
