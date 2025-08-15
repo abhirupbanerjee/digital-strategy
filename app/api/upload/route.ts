@@ -26,11 +26,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate file size (OpenAI has a 512MB limit)
-    const MAX_FILE_SIZE = 512 * 1024 * 1024; // 512MB in bytes
+    // Validate file size (20MB limit - updated from 512MB)
+    const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB in bytes
     if (file.size > MAX_FILE_SIZE) {
       return NextResponse.json(
-        { error: 'File size exceeds 512MB limit' },
+        { error: 'File size exceeds 20MB limit' },
         { status: 400 }
       );
     }

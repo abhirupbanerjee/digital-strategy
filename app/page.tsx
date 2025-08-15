@@ -3,15 +3,32 @@
 // Import necessary libraries and modules
 import React, { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import remarkGfm from "remark-gfm";
 
-// Define Message type
+// Define types
 interface Message {
   role: string;
   content: string;
   timestamp?: string;
-  fileIds?: string[]; // Track file IDs associated with messages
+  fileIds?: string[];
+}
+
+interface Project {
+  id: string;
+  name: string;
+  description?: string;
+  createdAt: string;
+  threads: string[];
+  color?: string;
+}
+
+interface Thread {
+  id: string;
+  projectId?: string;
+  title: string;
+  lastMessage?: string;
+  createdAt: string;
 }
 
 // Main ChatApp component
@@ -28,14 +45,43 @@ const ChatApp = () => {
   const [uploadingFile, setUploadingFile] = useState(false);
   const [fileIds, setFileIds] = useState<string[]>([]);
   const [searchInProgress, setSearchInProgress] = useState(false);
+  const [formatPreference, setFormatPreference] = useState<'default' | 'bullets' | 'table'>('default');
+  
+  // Project Management States
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [currentProject, setCurrentProject] = useState<Project | null>(null);
+  const [threads, setThreads] = useState<Thread[]>([]);
+  const [showProjectPanel, setShowProjectPanel] = useState(false);
+  const [showNewProjectModal, setShowNewProjectModal] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectDescription, setNewProjectDescription] = useState("");
+  
+  // Mobile UI States
+  const [isMobile, setIsMobile] = useState(false);
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
+  
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load chat history from localStorage on component mount
+  // Check for mobile device
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  // Load data from localStorage on component mount
   useEffect(() => {
     const savedMessages = localStorage.getItem("chatHistory");
     const savedThreadId = localStorage.getItem("threadId");
     const savedWebSearch = localStorage.getItem("webSearchEnabled");
+    const savedFormat = localStorage.getItem("formatPreference");
+    const savedProjects = localStorage.getItem("projects");
+    const savedThreads = localStorage.getItem("threads");
+    const savedCurrentProject = localStorage.getItem("currentProject");
     
     if (savedMessages) {
       try {
@@ -52,6 +98,34 @@ const ChatApp = () => {
     if (savedWebSearch) {
       setWebSearchEnabled(savedWebSearch === 'true');
     }
+
+    if (savedFormat) {
+      setFormatPreference(savedFormat as 'default' | 'bullets' | 'table');
+    }
+    
+    if (savedProjects) {
+      try {
+        setProjects(JSON.parse(savedProjects));
+      } catch (error) {
+        console.error("Error parsing saved projects:", error);
+      }
+    }
+    
+    if (savedThreads) {
+      try {
+        setThreads(JSON.parse(savedThreads));
+      } catch (error) {
+        console.error("Error parsing saved threads:", error);
+      }
+    }
+    
+    if (savedCurrentProject) {
+      try {
+        setCurrentProject(JSON.parse(savedCurrentProject));
+      } catch (error) {
+        console.error("Error parsing current project:", error);
+      }
+    }
   }, []);
 
   // Scroll to bottom when messages change
@@ -62,14 +136,92 @@ const ChatApp = () => {
     });
   }, [messages]);
 
-  // Save chat history and settings in localStorage
+  // Save data in localStorage
   useEffect(() => {
     localStorage.setItem("chatHistory", JSON.stringify(messages));
     if (threadId) localStorage.setItem("threadId", threadId);
     localStorage.setItem("webSearchEnabled", String(webSearchEnabled));
-  }, [messages, threadId, webSearchEnabled]);
+    localStorage.setItem("formatPreference", formatPreference);
+    localStorage.setItem("projects", JSON.stringify(projects));
+    localStorage.setItem("threads", JSON.stringify(threads));
+    if (currentProject) localStorage.setItem("currentProject", JSON.stringify(currentProject));
+  }, [messages, threadId, webSearchEnabled, formatPreference, projects, threads, currentProject]);
 
-  // Handle file upload
+  // Project Management Functions
+  const createProject = () => {
+    if (!newProjectName.trim()) return;
+    
+    const newProject: Project = {
+      id: `proj_${Date.now()}`,
+      name: newProjectName,
+      description: newProjectDescription,
+      createdAt: new Date().toISOString(),
+      threads: [],
+      color: `#${Math.floor(Math.random()*16777215).toString(16)}`
+    };
+    
+    setProjects(prev => [...prev, newProject]);
+    setCurrentProject(newProject);
+    setNewProjectName("");
+    setNewProjectDescription("");
+    setShowNewProjectModal(false);
+  };
+
+  const selectProject = (project: Project) => {
+    setCurrentProject(project);
+    // Load threads for this project
+    const projectThreads = threads.filter(t => project.threads.includes(t.id));
+    if (projectThreads.length > 0) {
+      // Load the most recent thread
+      loadThread(projectThreads[0].id);
+    } else {
+      // Start new thread in this project
+      setMessages([]);
+      setThreadId(null);
+    }
+  };
+
+  const loadThread = (threadId: string) => {
+    // Load thread messages from localStorage or API
+    const savedThreadMessages = localStorage.getItem(`thread_${threadId}_messages`);
+    if (savedThreadMessages) {
+      setMessages(JSON.parse(savedThreadMessages));
+      setThreadId(threadId);
+    }
+  };
+
+  const saveThreadToProject = () => {
+    if (!threadId || !currentProject) return;
+    
+    // Create thread record
+    const thread: Thread = {
+      id: threadId,
+      projectId: currentProject.id,
+      title: messages[0]?.content.substring(0, 50) || "New Chat",
+      lastMessage: messages[messages.length - 1]?.content.substring(0, 100),
+      createdAt: new Date().toISOString()
+    };
+    
+    // Update threads
+    setThreads(prev => {
+      const existing = prev.find(t => t.id === threadId);
+      if (existing) return prev;
+      return [...prev, thread];
+    });
+    
+    // Update project
+    setProjects(prev => prev.map(p => {
+      if (p.id === currentProject.id && !p.threads.includes(threadId)) {
+        return { ...p, threads: [...p.threads, threadId] };
+      }
+      return p;
+    }));
+    
+    // Save thread messages
+    localStorage.setItem(`thread_${threadId}_messages`, JSON.stringify(messages));
+  };
+
+  // Handle file upload with 20MB limit
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
@@ -81,10 +233,10 @@ const ChatApp = () => {
 
     try {
       for (const file of Array.from(files)) {
-        // Validate file size (512MB limit)
-        const MAX_SIZE = 512 * 1024 * 1024;
+        // Validate file size (20MB limit)
+        const MAX_SIZE = 20 * 1024 * 1024; // 20MB
         if (file.size > MAX_SIZE) {
-          failedUploads.push(`${file.name} (exceeds 512MB)`);
+          failedUploads.push(`${file.name} (exceeds 20MB limit)`);
           continue;
         }
 
@@ -157,7 +309,7 @@ const ChatApp = () => {
     setFileIds(prev => prev.filter((_, i) => i !== index));
   };
 
-  // Function to send user message and receive assistant response
+  // Send message function
   const sendMessage = async () => {
     if (activeRun || !input.trim()) return;
 
@@ -169,6 +321,16 @@ const ChatApp = () => {
       setSearchInProgress(true);
     }
 
+    // Add format preference to message if not default
+    let enhancedInput = input;
+    if (formatPreference !== 'default') {
+      const formatInstructions = {
+        bullets: '\n\n[Format: Please structure your response using bullet points where appropriate]',
+        table: '\n\n[Format: Please use tables to organize data when applicable]'
+      };
+      enhancedInput = input + formatInstructions[formatPreference];
+    }
+
     const userMessage = {
       role: "user",
       content: input,
@@ -176,7 +338,6 @@ const ChatApp = () => {
       fileIds: fileIds.length > 0 ? [...fileIds] : undefined
     };
     setMessages((prev) => [...prev, userMessage]);
-    const userInput = input;
     setInput("");
 
     // Show search indicator message if enabled
@@ -197,19 +358,17 @@ const ChatApp = () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          message: userInput,
+          message: enhancedInput,
           threadId: threadId,
           webSearchEnabled: webSearchEnabled,
           fileIds: fileIds.length > 0 ? fileIds : undefined
         }),
       });
 
-      // Check if response is ok first
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      // Get the response as text first to check if it's empty
       const responseText = await response.text();
       let data;
       try {
@@ -219,7 +378,6 @@ const ChatApp = () => {
         throw new Error('Invalid JSON response from server');
       }
 
-      // Check if the parsed data has an error
       if (data.error) {
         throw new Error(data.error);
       }
@@ -227,6 +385,10 @@ const ChatApp = () => {
       // Update thread ID if we got a new one
       if (data.threadId && data.threadId !== threadId) {
         setThreadId(data.threadId);
+        // Auto-save to current project
+        if (currentProject) {
+          saveThreadToProject();
+        }
       }
 
       // Remove search indicator message
@@ -287,7 +449,7 @@ const ChatApp = () => {
   // Copy chat to clipboard
   const copyChatToClipboard = async () => {
     const chatText = messages
-      .map((msg) => `${msg.timestamp} - ${msg.role === "user" ? "You" : msg.role === "system" ? "System" : "Digital Strategy Assistant"}:\n${msg.content}`)
+      .map((msg) => `${msg.timestamp} - ${msg.role === "user" ? "You" : msg.role === "system" ? "System" : "Grenada AI Assistant"}:\n${msg.content}`)
       .join("\n\n");
     try {
       await navigator.clipboard.writeText(chatText);
@@ -308,236 +470,607 @@ const ChatApp = () => {
     localStorage.removeItem("chatHistory");
   };
 
-  return (
-    <div className="h-screen w-full flex flex-col bg-white">
-      {/* Header */}
-      <header className="flex items-center justify-center w-full p-4 bg-white shadow-md">
-        <img src="/icon.png" alt="Icon" className="h-12 w-12 sm:h-16 sm:w-16" />
-        <h2 className="text-xl sm:text-2xl font-bold ml-2">Digital Strategy Assistant</h2>
-      </header>
+  // Start new chat in current project
+  const startNewChat = () => {
+    clearChat();
+    setShowProjectPanel(false);
+  };
 
-      {/* Chat Container */}
-      <div className="flex-grow w-full max-w-4xl mx-auto flex flex-col p-4">
-        <div
-          ref={chatContainerRef}
-          className="flex-grow overflow-y-auto border p-3 space-y-4 bg-white shadow rounded-lg h-[65vh] sm:h-[70vh]"
-        >
-          {messages.map((msg, index) => (
-            <motion.div key={index}>
-              <p className="font-bold mb-1">
-                {msg.role === "user" ? "You" : msg.role === "system" ? "System" : "Digital Strategy Assistant"}{" "}
-                {msg.timestamp && (
-                  <span className="text-xs text-gray-500">({msg.timestamp})</span>
-                )}
-              </p>
-              <div
-                className={`p-3 rounded-md ${
-                  msg.role === "user"
-                    ? "bg-gray-200 text-black"
-                    : msg.role === "system"
-                    ? "bg-blue-50 text-blue-900 border-blue-200"
-                    : "bg-white text-black border"
-                }`}
-              >
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    h1: ({ ...props }) => (
-                      <h1 style={{ fontFamily: "'Segoe UI', sans-serif", fontSize: "1.75rem", fontWeight: "bold", margin: "1rem 0" }} {...props} />
-                    ),
-                    h2: ({ ...props }) => (
-                      <h2 style={{ fontFamily: "'Segoe UI', sans-serif", fontSize: "1.5rem", fontWeight: "bold", margin: "1rem 0" }} {...props} />
-                    ),
-                    h3: ({ ...props }) => (
-                      <h3 style={{ fontFamily: "'Segoe UI', sans-serif", fontSize: "1.25rem", fontWeight: "bold", margin: "1rem 0" }} {...props} />
-                    ),
-                    code: ({ ...props }) => (
-                      <code style={{ fontFamily: "'Segoe UI', sans-serif", background: "#f3f4f6", padding: "0.2rem 0.4rem", borderRadius: "4px" }} {...props} />
-                    ),
-                    p: ({ node, ...props }) => (
-                      <p style={{ marginBottom: "0.75rem", lineHeight: "1.6", fontFamily: "'Segoe UI', sans-serif", fontSize: "16px" }} {...props} />
-                    ),
-                    ul: ({ node, ...props }) => (
-                      <ul style={{ listStyleType: "disc", paddingLeft: "1.5rem", marginBottom: "1rem" }} {...props} />
-                    ),
-                    ol: ({ node, ...props }) => (
-                      <ol style={{ listStyleType: "decimal", paddingLeft: "1.5rem", marginBottom: "1rem" }} {...props} />
-                    ),
-                    li: ({ node, ...props }) => (
-                      <li style={{ marginBottom: "0.4rem" }} {...props} />
-                    ),
-                    table: ({ node, ...props }) => (
-                      <table style={{ borderCollapse: "collapse", width: "100%", marginBottom: "1rem" }} {...props} />
-                    ),
-                    th: ({ node, ...props }) => (
-                      <th style={{ border: "1px solid #ccc", background: "#f3f4f6", padding: "8px", textAlign: "left" }} {...props} />
-                    ),
-                    td: ({ node, ...props }) => (
-                      <td style={{ border: "1px solid #ccc", padding: "8px", textAlign: "left" }} {...props} />
-                    ),
-                  }}
-                >
-                  {msg.content}
-                </ReactMarkdown>
+  return (
+    <div className="h-screen w-full flex flex-col bg-white md:flex-row">
+      {/* Desktop Sidebar / Mobile Menu */}
+      <AnimatePresence>
+        {(showProjectPanel || (!isMobile && projects.length > 0)) && (
+          <motion.div
+            initial={{ x: isMobile ? -300 : 0 }}
+            animate={{ x: 0 }}
+            exit={{ x: -300 }}
+            className={`${
+              isMobile 
+                ? 'fixed inset-y-0 left-0 z-50 w-80' 
+                : 'relative w-80 border-r'
+            } bg-gray-50 flex flex-col`}
+          >
+            {/* Project Header */}
+            <div className="p-4 border-b bg-white">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-lg">Projects</h3>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setShowNewProjectModal(true)}
+                    className="text-blue-600 hover:text-blue-700 text-sm"
+                  >
+                    + New
+                  </button>
+                  {isMobile && (
+                    <button
+                      onClick={() => setShowProjectPanel(false)}
+                      className="text-gray-500 hover:text-gray-700"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
               </div>
-            </motion.div>
-          ))}
-          {/* Typing Indicator */}
-          {typing && (
-            <div className="flex items-center gap-2 text-gray-500 italic p-2">
-              <span className="flex gap-1">
-                <span className="animate-bounce" style={{ animationDelay: '0ms' }}>●</span>
-                <span className="animate-bounce" style={{ animationDelay: '150ms' }}>●</span>
-                <span className="animate-bounce" style={{ animationDelay: '300ms' }}>●</span>
-              </span>
-              <span>Assistant is typing...</span>
+              
+              {currentProject && (
+                <div className="mt-2 p-2 bg-blue-50 rounded-md">
+                  <div className="flex items-center gap-2">
+                    <div 
+                      className="w-3 h-3 rounded-full" 
+                      style={{ backgroundColor: currentProject.color }}
+                    />
+                    <span className="text-sm font-medium">{currentProject.name}</span>
+                  </div>
+                  {currentProject.description && (
+                    <p className="text-xs text-gray-600 mt-1">{currentProject.description}</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Projects List */}
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="space-y-2">
+                {projects.map((project) => (
+                  <button
+                    key={project.id}
+                    onClick={() => selectProject(project)}
+                    className={`w-full text-left p-3 rounded-lg transition-colors ${
+                      currentProject?.id === project.id
+                        ? 'bg-blue-100 border-blue-300'
+                        : 'bg-white hover:bg-gray-100'
+                    } border`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div 
+                        className="w-3 h-3 rounded-full flex-shrink-0" 
+                        style={{ backgroundColor: project.color }}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-sm">{project.name}</div>
+                        <div className="text-xs text-gray-500">
+                          {project.threads.length} chat(s)
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              {/* Recent Threads in Current Project */}
+              {currentProject && (
+                <div className="mt-6">
+                  <h4 className="text-sm font-medium text-gray-700 mb-2">Recent Chats</h4>
+                  <div className="space-y-1">
+                    {threads
+                      .filter(t => currentProject.threads.includes(t.id))
+                      .slice(0, 5)
+                      .map((thread) => (
+                        <button
+                          key={thread.id}
+                          onClick={() => loadThread(thread.id)}
+                          className={`w-full text-left p-2 rounded text-sm ${
+                            threadId === thread.id
+                              ? 'bg-blue-50 text-blue-700'
+                              : 'hover:bg-gray-100'
+                          }`}
+                        >
+                          <div className="truncate">{thread.title}</div>
+                          <div className="text-xs text-gray-500 truncate">
+                            {thread.lastMessage}
+                          </div>
+                        </button>
+                      ))}
+                  </div>
+                  <button
+                    onClick={startNewChat}
+                    className="mt-2 w-full text-center text-sm text-blue-600 hover:text-blue-700 py-2"
+                  >
+                    + Start New Chat
+                  </button>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Main Chat Area */}
+      <div className="flex-1 flex flex-col">
+        {/* Header */}
+        <header className="flex items-center justify-between w-full p-3 md:p-4 bg-white shadow-md">
+          <div className="flex items-center gap-2">
+            {isMobile && (
+              <button
+                onClick={() => setShowProjectPanel(!showProjectPanel)}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              </button>
+            )}
+            <img src="/icon.png" alt="Icon" className="h-8 w-8 md:h-12 md:w-12" />
+            <h2 className="text-lg md:text-xl font-bold">Grenada AI Assistant</h2>
+          </div>
+          {!isMobile && currentProject && (
+            <div className="flex items-center gap-2">
+              <div 
+                className="w-3 h-3 rounded-full" 
+                style={{ backgroundColor: currentProject.color }}
+              />
+              <span className="text-sm">{currentProject.name}</span>
             </div>
           )}
-        </div>
-      </div>
+        </header>
 
-      {/* Settings & Features Bar */}
-      <div className="w-full max-w-4xl mx-auto px-4 pb-2">
-        <div className="flex flex-col gap-2 border-t pt-3">
-          {/* Feature Toggles */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              {/* Web Search Toggle */}
-              <label className="flex items-center cursor-pointer group">
-                <input
-                  type="checkbox"
-                  checked={webSearchEnabled}
-                  onChange={(e) => setWebSearchEnabled(e.target.checked)}
-                  className="mr-2 w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
-                />
-                <span className="text-sm flex items-center gap-1">
-                  {searchInProgress ? (
-                    <span className="animate-pulse">🔍</span>
-                  ) : (
-                    <span>🔍</span>
+        {/* Chat Container */}
+        <div className="flex-grow flex flex-col p-2 md:p-4">
+          <div
+            ref={chatContainerRef}
+            className="flex-grow overflow-y-auto border p-3 space-y-4 bg-white shadow rounded-lg"
+          >
+            {messages.map((msg, index) => (
+              <motion.div key={index}>
+                <p className="font-bold mb-1 text-sm md:text-base">
+                  {msg.role === "user" ? "You" : msg.role === "system" ? "System" : "Grenada AI Assistant"}{" "}
+                  {msg.timestamp && (
+                    <span className="text-xs text-gray-500">({msg.timestamp})</span>
                   )}
-                  Web Search
-                  {webSearchEnabled && (
-                    <span className="text-xs text-green-600 font-semibold">ON</span>
-                  )}
+                </p>
+                <div
+                  className={`p-3 rounded-md ${
+                    msg.role === "user"
+                      ? "bg-gray-200 text-black"
+                      : msg.role === "system"
+                      ? "bg-blue-50 text-blue-900 border-blue-200"
+                      : "bg-white text-black border"
+                  }`}
+                >
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      // Headers with OpenAI-style formatting
+                      h1: ({ children, ...props }) => (
+                        <h1 className="text-xl md:text-2xl font-bold mt-4 md:mt-6 mb-3 md:mb-4 text-gray-900" {...props}>{children}</h1>
+                      ),
+                      h2: ({ children, ...props }) => (
+                        <h2 className="text-lg md:text-xl font-semibold mt-3 md:mt-5 mb-2 md:mb-3 text-gray-800" {...props}>{children}</h2>
+                      ),
+                      h3: ({ children, ...props }) => (
+                        <h3 className="text-base md:text-lg font-semibold mt-3 md:mt-4 mb-2 text-gray-800" {...props}>{children}</h3>
+                      ),
+                      // Paragraphs
+                      p: ({ children, ...props }) => (
+                        <p className="mb-3 md:mb-4 leading-relaxed text-sm md:text-base text-gray-700" {...props}>{children}</p>
+                      ),
+                      // Links with citation support
+                      a: ({ href, children, ...props }) => {
+                        const isCitation = href?.startsWith('http');
+                        return (
+                          <a 
+                            href={href} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className={isCitation 
+                              ? "text-blue-600 hover:text-blue-800 underline decoration-1 hover:decoration-2 transition-colors"
+                              : "text-blue-600 hover:text-blue-800 underline"
+                            }
+                            {...props}
+                          >
+                            {children}
+                            {isCitation && <span className="text-xs ml-1">↗</span>}
+                          </a>
+                        );
+                      },
+                      // Code blocks
+                      code: ({ inline, className, children, ...props }: any) => {
+                        return !inline ? (
+                          <pre className="bg-gray-900 text-gray-100 rounded-lg p-3 md:p-4 overflow-x-auto mb-3 md:mb-4 text-xs md:text-sm">
+                            <code className={className} {...props}>
+                              {children}
+                            </code>
+                          </pre>
+                        ) : (
+                          <code className="bg-gray-100 text-red-600 px-1 py-0.5 rounded text-xs md:text-sm font-mono" {...props}>
+                            {children}
+                          </code>
+                        );
+                      },
+                      // Lists
+                      ul: ({ children, ...props }) => (
+                        <ul className="list-disc pl-5 md:pl-6 mb-3 md:mb-4 space-y-1 md:space-y-2 text-sm md:text-base" {...props}>{children}</ul>
+                      ),
+                      ol: ({ children, ...props }) => (
+                        <ol className="list-decimal pl-5 md:pl-6 mb-3 md:mb-4 space-y-1 md:space-y-2 text-sm md:text-base" {...props}>{children}</ol>
+                      ),
+                      li: ({ children, ...props }) => (
+                        <li className="text-gray-700 leading-relaxed text-sm md:text-base" {...props}>{children}</li>
+                      ),
+                      // Tables
+                      table: ({ children, ...props }) => (
+                        <div className="overflow-x-auto mb-3 md:mb-4">
+                          <table className="min-w-full border-collapse border border-gray-300 text-sm md:text-base" {...props}>
+                            {children}
+                          </table>
+                        </div>
+                      ),
+                      th: ({ children, ...props }) => (
+                        <th className="border border-gray-300 px-2 md:px-4 py-1 md:py-2 text-left font-semibold text-gray-900 bg-gray-100 text-sm md:text-base" {...props}>
+                          {children}
+                        </th>
+                      ),
+                      td: ({ children, ...props }) => (
+                        <td className="border border-gray-300 px-2 md:px-4 py-1 md:py-2 text-gray-700 text-sm md:text-base" {...props}>
+                          {children}
+                        </td>
+                      ),
+                      // Blockquotes
+                      blockquote: ({ children, ...props }) => (
+                        <blockquote className="border-l-4 border-gray-300 pl-3 md:pl-4 py-2 mb-3 md:mb-4 italic text-gray-600 text-sm md:text-base" {...props}>
+                          {children}
+                        </blockquote>
+                      ),
+                      // Strong/Bold
+                      strong: ({ children, ...props }) => (
+                        <strong className="font-semibold text-gray-900" {...props}>{children}</strong>
+                      ),
+                    }}
+                  >
+                    {msg.content}
+                  </ReactMarkdown>
+                </div>
+              </motion.div>
+            ))}
+            {/* Typing Indicator */}
+            {typing && (
+              <div className="flex items-center gap-2 text-gray-500 italic p-2">
+                <span className="flex gap-1">
+                  <span className="animate-bounce" style={{ animationDelay: '0ms' }}>●</span>
+                  <span className="animate-bounce" style={{ animationDelay: '150ms' }}>●</span>
+                  <span className="animate-bounce" style={{ animationDelay: '300ms' }}>●</span>
                 </span>
-              </label>
+                <span className="text-sm">Assistant is typing...</span>
+              </div>
+            )}
+          </div>
+        </div>
 
-              {/* File Upload */}
-              <div className="flex items-center">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  onChange={handleFileUpload}
-                  className="hidden"
-                  accept=".txt,.pdf,.doc,.docx,.xls,.xlsx,.csv,.json,.xml,.html,.md"
-                />
+        {/* Settings & Features Bar */}
+        <div className="border-t bg-gray-50">
+          {/* Desktop Layout */}
+          {!isMobile && (
+            <div className="p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-4">
+                  {/* Web Search Toggle */}
+                  <label className="flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={webSearchEnabled}
+                      onChange={(e) => setWebSearchEnabled(e.target.checked)}
+                      className="mr-2 w-4 h-4 text-blue-600 rounded"
+                    />
+                    <span className="text-sm flex items-center gap-1">
+                      {searchInProgress ? (
+                        <span className="animate-pulse">🔍</span>
+                      ) : (
+                        <span>🔍</span>
+                      )}
+                      Web Search
+                      {webSearchEnabled && (
+                        <span className="text-xs text-green-600 font-semibold">ON</span>
+                      )}
+                    </span>
+                  </label>
+
+                  {/* Format Options */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-600">Format:</span>
+                    <select
+                      value={formatPreference}
+                      onChange={(e) => setFormatPreference(e.target.value as 'default' | 'bullets' | 'table')}
+                      className="text-sm border rounded px-2 py-1"
+                    >
+                      <option value="default">Default</option>
+                      <option value="bullets">• Bullets</option>
+                      <option value="table">⊞ Tables</option>
+                    </select>
+                  </div>
+
+                  {/* File Upload */}
+                  <div className="flex items-center">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      onChange={handleFileUpload}
+                      className="hidden"
+                      accept=".txt,.pdf,.doc,.docx,.xls,.xlsx,.csv,.json,.xml,.html,.md"
+                    />
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploadingFile}
+                      className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700 disabled:opacity-50"
+                    >
+                      {uploadingFile ? (
+                        <>
+                          <span className="animate-spin">⏳</span>
+                          Uploading...
+                        </>
+                      ) : (
+                        <>
+                          📎 Attach Files
+                          <span className="text-xs text-gray-500">(Max 20MB)</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Status Indicators */}
+                <div className="flex items-center gap-3 text-sm">
+                  {webSearchEnabled && (
+                    <span className="px-2 py-1 bg-blue-50 text-blue-700 rounded-full text-xs">
+                      Tavily Active
+                    </span>
+                  )}
+                  {threadId && (
+                    <span className="text-xs text-gray-500">
+                      ID: {threadId.substring(0, 8)}...
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Uploaded Files Display */}
+              {uploadedFiles.length > 0 && (
+                <div className="flex flex-wrap gap-2 p-2 bg-white rounded-md border">
+                  <span className="text-sm text-gray-600 font-medium">Files:</span>
+                  {uploadedFiles.map((file, index) => (
+                    <div
+                      key={index}
+                      className="flex items-center gap-1 px-2 py-1 bg-gray-50 border border-gray-200 rounded-md text-sm"
+                    >
+                      <span>📄</span>
+                      <span className="max-w-[150px] truncate">{file.name}</span>
+                      <span className="text-xs text-gray-500">
+                        ({(file.size / 1024 / 1024).toFixed(1)}MB)
+                      </span>
+                      <button
+                        onClick={() => removeFile(index)}
+                        className="ml-1 text-red-500 hover:text-red-700"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Mobile Layout */}
+          {isMobile && (
+            <div className="p-2">
+              {/* Compact Mobile Controls */}
+              <div className="flex items-center gap-2 mb-2">
+                <button
+                  onClick={() => setWebSearchEnabled(!webSearchEnabled)}
+                  className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors ${
+                    webSearchEnabled 
+                      ? 'bg-blue-600 text-white' 
+                      : 'bg-gray-200 text-gray-700'
+                  }`}
+                >
+                  🔍 Search {webSearchEnabled && '✓'}
+                </button>
+                
+                <select
+                  value={formatPreference}
+                  onChange={(e) => setFormatPreference(e.target.value as 'default' | 'bullets' | 'table')}
+                  className="flex-1 py-2 px-3 rounded-lg text-sm border bg-white"
+                >
+                  <option value="default">Format: Default</option>
+                  <option value="bullets">Format: Bullets</option>
+                  <option value="table">Format: Tables</option>
+                </select>
+                
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   disabled={uploadingFile}
-                  className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700 disabled:opacity-50"
+                  className="p-2 rounded-lg bg-gray-200 text-gray-700"
                 >
-                  {uploadingFile ? (
-                    <>
-                      <span className="animate-spin">⏳</span>
-                      Uploading...
-                    </>
-                  ) : (
-                    <>
-                      📎 Attach Files
-                      <span className="text-xs text-gray-500">(Max 512MB)</span>
-                    </>
-                  )}
+                  📎
                 </button>
               </div>
-            </div>
 
-            {/* Status Indicators */}
-            <div className="flex items-center gap-3 text-sm">
-              {webSearchEnabled && (
-                <span className="px-2 py-1 bg-blue-50 text-blue-700 rounded-full text-xs">
-                  Tavily Search Active
-                </span>
-              )}
-              {threadId && (
-                <span className="text-xs text-gray-500">
-                  Session: {threadId.substring(0, 8)}...
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Uploaded Files Display */}
-          {uploadedFiles.length > 0 && (
-            <div className="flex flex-wrap gap-2 p-2 bg-gray-50 rounded-md">
-              <span className="text-sm text-gray-600 font-medium">Attached:</span>
-              {uploadedFiles.map((file, index) => (
-                <div
-                  key={index}
-                  className="flex items-center gap-1 px-2 py-1 bg-white border border-gray-200 rounded-md text-sm"
-                >
-                  <span>📄</span>
-                  <span className="max-w-[150px] truncate">{file.name}</span>
-                  <span className="text-xs text-gray-500">
-                    ({(file.size / 1024).toFixed(1)}KB)
-                  </span>
-                  <button
-                    onClick={() => removeFile(index)}
-                    className="ml-1 text-red-500 hover:text-red-700"
-                    title="Remove file"
-                  >
-                    ×
-                  </button>
+              {/* Mobile File Display */}
+              {uploadedFiles.length > 0 && (
+                <div className="flex gap-1 overflow-x-auto pb-2">
+                  {uploadedFiles.map((file, index) => (
+                    <div
+                      key={index}
+                      className="flex items-center gap-1 px-2 py-1 bg-gray-100 rounded text-xs whitespace-nowrap"
+                    >
+                      <span>{file.name}</span>
+                      <button
+                        onClick={() => removeFile(index)}
+                        className="text-red-500"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ))}
-              <button
-                onClick={() => {
-                  setUploadedFiles([]);
-                  setFileIds([]);
-                }}
-                className="text-xs text-red-600 hover:text-red-700"
-              >
-                Clear all
-              </button>
+              )}
             </div>
           )}
         </div>
+
+        {/* Input & Controls */}
+        <div className="p-3 md:p-4 bg-white border-t">
+          <div className="flex flex-col gap-2">
+            {/* Input Row */}
+            <div className="flex items-center gap-2">
+              <input
+                className="flex-1 border rounded-lg px-3 py-2 text-sm md:text-base focus:outline-none focus:ring-2 focus:ring-blue-500"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendMessage()}
+                placeholder="Type a message..."
+              />
+              <button
+                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                  loading 
+                    ? 'bg-gray-300 text-gray-500' 
+                    : 'bg-blue-500 hover:bg-blue-600 text-white'
+                }`}
+                onClick={sendMessage}
+                disabled={loading}
+              >
+                {loading ? (
+                  <span className="animate-pulse">...</span>
+                ) : (
+                  <span>{isMobile ? '→' : 'Send'}</span>
+                )}
+              </button>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex gap-2">
+              {!isMobile && (
+                <>
+                  <button
+                    className="flex-1 py-2 px-3 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg text-sm font-medium transition-colors"
+                    onClick={copyChatToClipboard}
+                  >
+                    Copy Chat
+                  </button>
+                  <button
+                    className="flex-1 py-2 px-3 bg-red-400 hover:bg-red-500 text-white rounded-lg text-sm font-medium transition-colors"
+                    onClick={clearChat}
+                  >
+                    Clear Chat
+                  </button>
+                </>
+              )}
+              {isMobile && (
+                <div className="flex gap-2 w-full">
+                  <button
+                    className="flex-1 py-2 px-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-sm"
+                    onClick={copyChatToClipboard}
+                  >
+                    📋 Copy
+                  </button>
+                  <button
+                    className="flex-1 py-2 px-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-sm"
+                    onClick={clearChat}
+                  >
+                    🗑️ Clear
+                  </button>
+                  {currentProject && (
+                    <button
+                      className="flex-1 py-2 px-3 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm"
+                      onClick={saveThreadToProject}
+                    >
+                      💾 Save
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
 
-      {/* Input & Controls */}
-      <div className="w-full max-w-4xl mx-auto p-4 flex flex-col gap-2">
-        <div className="flex flex-col sm:flex-row items-center gap-2">
-          <input
-            className="border rounded p-3 w-full sm:w-4/5"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-            placeholder="Type a message..."
-          />
-          <button
-            className="bg-blue-500 hover:bg-blue-600 text-white p-3 rounded w-full sm:w-1/5"
-            onClick={sendMessage}
-            disabled={loading}
+      {/* New Project Modal */}
+      <AnimatePresence>
+        {showNewProjectModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+            onClick={() => setShowNewProjectModal(false)}
           >
-            {loading ? "..." : "Send"}
-          </button>
-        </div>
-        <div className="flex flex-col sm:flex-row gap-2">
-          <button
-            className="bg-yellow-500 hover:bg-yellow-600 text-white p-3 rounded w-full"
-            onClick={copyChatToClipboard}
-          >
-            Copy Chat
-          </button>
-          <button
-            className="bg-red-400 hover:bg-red-500 text-white p-3 rounded w-full"
-            onClick={clearChat}
-          >
-            Clear Chat
-          </button>
-        </div>
-      </div>
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-lg p-6 max-w-md w-full"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-lg font-semibold mb-4">Create New Project</h3>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Project Name *
+                  </label>
+                  <input
+                    type="text"
+                    value={newProjectName}
+                    onChange={(e) => setNewProjectName(e.target.value)}
+                    className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="e.g., Research Project"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Description (Optional)
+                  </label>
+                  <textarea
+                    value={newProjectDescription}
+                    onChange={(e) => setNewProjectDescription(e.target.value)}
+                    className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    rows={3}
+                    placeholder="Brief description of the project..."
+                  />
+                </div>
+              </div>
+              
+              <div className="flex gap-2 mt-6">
+                <button
+                  onClick={() => setShowNewProjectModal(false)}
+                  className="flex-1 py-2 px-4 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={createProject}
+                  disabled={!newProjectName.trim()}
+                  className="flex-1 py-2 px-4 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50"
+                >
+                  Create Project
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
