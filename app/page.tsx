@@ -4,6 +4,13 @@ import React, { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import { motion, AnimatePresence } from "framer-motion";
 import remarkGfm from "remark-gfm";
+import { useMemo } from "react";
+
+
+const randomColor = () => `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0')}`;
+// unique marker so we only remove *our* search placeholder
+const SEARCH_FLAG = '___WEB_SEARCH_IN_PROGRESS___';
+
 
 // Define types
 interface Message {
@@ -44,6 +51,7 @@ const ChatApp = () => {
   const [fileIds, setFileIds] = useState<string[]>([]);
   const [searchInProgress, setSearchInProgress] = useState(false);
   const [formatPreference, setFormatPreference] = useState<'default' | 'bullets' | 'table'>('default');
+  
   // Project Management States
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
@@ -52,9 +60,10 @@ const ChatApp = () => {
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectDescription, setNewProjectDescription] = useState("");
+  
   // Mobile UI States
   const [isMobile, setIsMobile] = useState(false);
-  const [showMobileMenu, setShowMobileMenu] = useState(false);
+  //const [showMobileMenu, setShowMobileMenu] = useState(false);
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -72,16 +81,21 @@ const ChatApp = () => {
   fetch('/api/projects')
     .then(res => res.json())
     .then(data => {
-      // Even if no projects, show sidebar on desktop
-      setProjects(data.projects || []);
-      // Auto-create first project if none exist
+      // normalize projects so `threads` is always string[]
+      const normalized = (data.projects || []).map((p: any) => ({
+      ...p,
+      threads: Array.isArray(p.threads) ? p.threads.map((t: any) => t.id) : (p.threads || [])
+      }));
+      setProjects(normalized);
+
       if (!data.projects || data.projects.length === 0) {
-        // Optional: Create default project
-        createProject();
+        setShowProjectPanel(true);      // make sidebar visible
+        setShowNewProjectModal(true);   // prompt user to create first project
       }
     })
     .catch(err => console.error('Error loading projects:', err));
 }, []);
+
 
 
   // Scroll to bottom when messages change
@@ -96,61 +110,77 @@ const ChatApp = () => {
   const createProject = async () => {
   if (!newProjectName.trim()) return;
   try {
-    const res = await fetch('/api/projects', {
+      const res = await fetch('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: newProjectName,
         description: newProjectDescription,
-        color: `#${Math.floor(Math.random()*16777215).toString(16)}`
+        color: randomColor()
       })
     });
     if (!res.ok) throw new Error('Failed to create project');
-    const created = await res.json(); // canonical server record
+    const payload = await res.json();
+    const created = payload.project ?? payload; // supports {project: {...}} and raw row
     setProjects(prev => [...prev, created]);
     setCurrentProject(created);
     setNewProjectName('');
     setNewProjectDescription('');
     setShowNewProjectModal(false);
+    setShowProjectPanel(true); // ensure sidebar remains visible on desktop & mobile
   } catch (err) {
     console.error('Create Project error:', err);
   }
 };
 
-  const loadProject = async (projectId: string) => {
-    try {
-      const response = await fetch(`/api/projects/${projectId}`);
-      if (!response.ok) throw new Error('Failed to load project');
-      const data = await response.json();
-      setCurrentProject(data);
-      const threadIds = data.threads;
-      if (threadIds && threadIds.length > 0) {
-        const threadResponse = await fetch(`/api/threads?threadId=${threadIds[0]}`);
-        if (!threadResponse.ok) throw new Error('Failed to load thread');
-        const threadData = await threadResponse.json();
-        setMessages(threadData.messages);
-        setThreadId(threadIds[0]);
-      } else {
-        setMessages([]);
-        setThreadId(null);
-      }
-    } catch (error) {
-      console.error("Load Project:", error);
-    }
-  };
+const currentProjectThreadIdSet = useMemo(
+  () => new Set(currentProject?.threads ?? []),
+  [currentProject]
+);  
+
+const loadProject = async (projectId: string) => {
+  const response = await fetch(`/api/projects/${projectId}`);
+  if (!response.ok) throw new Error('Failed to load project');
+  const data = await response.json();
+
+  // Normalize threads: objects -> ids
+  const threadObjs = Array.isArray(data.threads) ? data.threads : [];
+  const threadIds = threadObjs.map((t: any) => t.id);
+
+  setCurrentProject({ ...data, threads: threadIds });
+
+  // Hydrate local `threads` for sidebar rendering (see #5)
+  setThreads(prev => {
+  const next = [
+    ...prev.filter(t => !threadIds.includes(t.id)),
+    ...threadObjs.map((t: any) => ({
+      id: t.id,
+      projectId: data.id,
+      title: t.title ?? 'Untitled',
+      lastMessage: '',
+      createdAt: t.created_at ?? new Date().toISOString()
+    }))
+  ];
+  return next;
+});
+
+
+  if (threadIds.length > 0) {
+    await loadThread(threadIds[0]);
+  } else {
+    setMessages([]);
+    setThreadId(null);
+  }
+};
+
 
 
   const selectProject = (project: Project) => {
-    setCurrentProject(project);
-    // Load threads for this project
-    const projectThreads = threads.filter(t => project.threads.includes(t.id));
-    if (projectThreads.length > 0) {
-      loadThread(projectThreads[0].id);
-    } else {
-      setMessages([]);
-      setThreadId(null);
-    }
-  };
+  // Always load fresh (and hydrate `threads`) from the server
+  loadProject(project.id);
+};
+
+
 
   const loadThread = async (threadId: string) => {
     try {
@@ -269,6 +299,8 @@ const ChatApp = () => {
     setFileIds(prev => prev.filter((_, i) => i !== index));
   };
 
+
+
   // Send message function
   const sendMessage = async () => {
     if (activeRun || !input.trim()) return;
@@ -292,12 +324,16 @@ const ChatApp = () => {
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     if (webSearchEnabled) {
-      setMessages(prev => [...prev, {
+      setMessages(prev => [
+      ...prev,
+      {
         role: "system",
-        content: "🔍 Searching the web for current information...",
-        timestamp: new Date().toLocaleString()
-      }]);
-    }
+        content: `🔍 Searching the web for current information... ${SEARCH_FLAG}`,
+        timestamp: new Date().toLocaleString(),
+      }
+    ]);
+    } 
+
     try {
       setTyping(true);
       const response = await fetch('/api/chat', {
@@ -310,6 +346,7 @@ const ChatApp = () => {
           fileIds: fileIds.length > 0 ? fileIds : undefined
         }),
       });
+
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const responseText = await response.text();
       let data;
@@ -319,16 +356,19 @@ const ChatApp = () => {
         console.error('Failed to parse JSON response:', responseText);
         throw new Error('Invalid JSON response from server');
       }
+
       if (data.error) throw new Error(data.error);
       if (data.threadId && data.threadId !== threadId) {
         setThreadId(data.threadId);
         if (currentProject) saveThreadToProject();
       }
+
       if (webSearchEnabled) {
-        setMessages(prev => prev.filter(msg => 
-          !(msg.role === "system" && msg.content.includes("Searching the web"))
+        setMessages(prev => prev.filter(msg =>
+         !(msg.role === "system" && typeof msg.content === 'string' && msg.content.includes(SEARCH_FLAG))
         ));
       }
+
       if (fileIds.length > 0) {
         setFileIds([]);
         setUploadedFiles([]);
@@ -343,11 +383,13 @@ const ChatApp = () => {
       ]);
     } catch (error: any) {
       console.error("Error:", error);
+
       if (webSearchEnabled) {
-        setMessages(prev => prev.filter(msg => 
-          !(msg.role === "system" && msg.content.includes("Searching the web"))
+        setMessages(prev => prev.filter(msg =>
+         !(msg.role === "system" && typeof msg.content === 'string' && msg.content.includes(SEARCH_FLAG))
         ));
       }
+      
       let errorMessage = "Unable to reach assistant.";
       if (error.message) errorMessage = error.message;
       setMessages((prev) => [
@@ -398,7 +440,7 @@ return (
   <div className="h-screen w-full flex flex-col bg-white md:flex-row">
     {/* Desktop Sidebar / Mobile Menu */}
     <AnimatePresence>
-      {(showProjectPanel || (!isMobile && projects.length > 0)) && (
+      {(showProjectPanel || !isMobile) && (
           <motion.div
             initial={{ x: isMobile ? -300 : 0 }}
             animate={{ x: 0 }}
@@ -468,7 +510,7 @@ return (
                       <div className="flex-1 min-w-0">
                         <div className="font-medium text-sm">{project.name}</div>
                         <div className="text-xs text-gray-500">
-                          {project.threads.length} chat(s)
+                          {Array.isArray(project.threads) ? project.threads.length : 0} chat(s)
                         </div>
                       </div>
                     </div>
