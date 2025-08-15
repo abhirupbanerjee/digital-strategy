@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@sendgrid/mail": "^8.1.5",
+    "@supabase/supabase-js": "^2.55.0",
     "axios": "^1.8.4",
     "dotenv": "^16.5.0",
     "framer-motion": "^12.5.0",

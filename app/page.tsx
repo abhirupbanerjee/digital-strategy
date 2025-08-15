@@ -1,6 +1,5 @@
 "use client";
 
-// Import necessary libraries and modules
 import React, { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import { motion, AnimatePresence } from "framer-motion";
@@ -31,9 +30,8 @@ interface Thread {
   createdAt: string;
 }
 
-// Main ChatApp component
 const ChatApp = () => {
-  // Define States
+  // States
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [threadId, setThreadId] = useState<string | null>(null);
@@ -46,7 +44,6 @@ const ChatApp = () => {
   const [fileIds, setFileIds] = useState<string[]>([]);
   const [searchInProgress, setSearchInProgress] = useState(false);
   const [formatPreference, setFormatPreference] = useState<'default' | 'bullets' | 'table'>('default');
-  
   // Project Management States
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
@@ -55,77 +52,29 @@ const ChatApp = () => {
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectDescription, setNewProjectDescription] = useState("");
-  
   // Mobile UI States
   const [isMobile, setIsMobile] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
-  
+
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Check for mobile device
   useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768);
-    };
+    const checkMobile = () => setIsMobile(window.innerWidth < 768);
     checkMobile();
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  // Load data from localStorage on component mount
+  // Initial load from API
   useEffect(() => {
-    const savedMessages = localStorage.getItem("chatHistory");
-    const savedThreadId = localStorage.getItem("threadId");
-    const savedWebSearch = localStorage.getItem("webSearchEnabled");
-    const savedFormat = localStorage.getItem("formatPreference");
-    const savedProjects = localStorage.getItem("projects");
-    const savedThreads = localStorage.getItem("threads");
-    const savedCurrentProject = localStorage.getItem("currentProject");
-    
-    if (savedMessages) {
-      try {
-        setMessages(JSON.parse(savedMessages));
-      } catch (error) {
-        console.error("Error parsing saved messages:", error);
-      }
-    }
-    
-    if (savedThreadId) {
-      setThreadId(savedThreadId);
-    }
-
-    if (savedWebSearch) {
-      setWebSearchEnabled(savedWebSearch === 'true');
-    }
-
-    if (savedFormat) {
-      setFormatPreference(savedFormat as 'default' | 'bullets' | 'table');
-    }
-    
-    if (savedProjects) {
-      try {
-        setProjects(JSON.parse(savedProjects));
-      } catch (error) {
-        console.error("Error parsing saved projects:", error);
-      }
-    }
-    
-    if (savedThreads) {
-      try {
-        setThreads(JSON.parse(savedThreads));
-      } catch (error) {
-        console.error("Error parsing saved threads:", error);
-      }
-    }
-    
-    if (savedCurrentProject) {
-      try {
-        setCurrentProject(JSON.parse(savedCurrentProject));
-      } catch (error) {
-        console.error("Error parsing current project:", error);
-      }
-    }
+    // Load projects
+    fetch('/api/projects')
+      .then(res => res.json())
+      .then(data => setProjects(data.projects || []))
+      .catch(err => console.error('Error loading projects:', err));
+    // Optionally load threads/messages for default project/thread
   }, []);
 
   // Scroll to bottom when messages change
@@ -136,64 +85,80 @@ const ChatApp = () => {
     });
   }, [messages]);
 
-  // Save data in localStorage
-  useEffect(() => {
-    localStorage.setItem("chatHistory", JSON.stringify(messages));
-    if (threadId) localStorage.setItem("threadId", threadId);
-    localStorage.setItem("webSearchEnabled", String(webSearchEnabled));
-    localStorage.setItem("formatPreference", formatPreference);
-    localStorage.setItem("projects", JSON.stringify(projects));
-    localStorage.setItem("threads", JSON.stringify(threads));
-    if (currentProject) localStorage.setItem("currentProject", JSON.stringify(currentProject));
-  }, [messages, threadId, webSearchEnabled, formatPreference, projects, threads, currentProject]);
-
   // Project Management Functions
-  const createProject = () => {
-    if (!newProjectName.trim()) return;
-    
-    const newProject: Project = {
-      id: `proj_${Date.now()}`,
-      name: newProjectName,
-      description: newProjectDescription,
-      createdAt: new Date().toISOString(),
-      threads: [],
-      color: `#${Math.floor(Math.random()*16777215).toString(16)}`
-    };
-    
-    setProjects(prev => [...prev, newProject]);
-    setCurrentProject(newProject);
-    setNewProjectName("");
-    setNewProjectDescription("");
+  const createProject = async () => {
+  if (!newProjectName.trim()) return;
+  try {
+    const res = await fetch('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: newProjectName,
+        description: newProjectDescription,
+        color: `#${Math.floor(Math.random()*16777215).toString(16)}`
+      })
+    });
+    if (!res.ok) throw new Error('Failed to create project');
+    const created = await res.json(); // canonical server record
+    setProjects(prev => [...prev, created]);
+    setCurrentProject(created);
+    setNewProjectName('');
+    setNewProjectDescription('');
     setShowNewProjectModal(false);
+  } catch (err) {
+    console.error('Create Project error:', err);
+  }
+};
+
+  const loadProject = async (projectId: string) => {
+    try {
+      const response = await fetch(`/api/projects/${projectId}`);
+      if (!response.ok) throw new Error('Failed to load project');
+      const data = await response.json();
+      setCurrentProject(data);
+      const threadIds = data.threads;
+      if (threadIds && threadIds.length > 0) {
+        const threadResponse = await fetch(`/api/threads?threadId=${threadIds[0]}`);
+        if (!threadResponse.ok) throw new Error('Failed to load thread');
+        const threadData = await threadResponse.json();
+        setMessages(threadData.messages);
+        setThreadId(threadIds[0]);
+      } else {
+        setMessages([]);
+        setThreadId(null);
+      }
+    } catch (error) {
+      console.error("Load Project:", error);
+    }
   };
+
 
   const selectProject = (project: Project) => {
     setCurrentProject(project);
     // Load threads for this project
     const projectThreads = threads.filter(t => project.threads.includes(t.id));
     if (projectThreads.length > 0) {
-      // Load the most recent thread
       loadThread(projectThreads[0].id);
     } else {
-      // Start new thread in this project
       setMessages([]);
       setThreadId(null);
     }
   };
 
-  const loadThread = (threadId: string) => {
-    // Load thread messages from localStorage or API
-    const savedThreadMessages = localStorage.getItem(`thread_${threadId}_messages`);
-    if (savedThreadMessages) {
-      setMessages(JSON.parse(savedThreadMessages));
+  const loadThread = async (threadId: string) => {
+    try {
+      const response = await fetch(`/api/threads?threadId=${threadId}`);
+      if (!response.ok) throw new Error('Failed to load thread');
+      const data = await response.json();
+      setMessages(data.messages);
       setThreadId(threadId);
+    } catch (error) {
+      console.error("Load Thread:", error);
     }
   };
 
-  const saveThreadToProject = () => {
+  const saveThreadToProject = async () => {
     if (!threadId || !currentProject) return;
-    
-    // Create thread record
     const thread: Thread = {
       id: threadId,
       projectId: currentProject.id,
@@ -201,61 +166,56 @@ const ChatApp = () => {
       lastMessage: messages[messages.length - 1]?.content.substring(0, 100),
       createdAt: new Date().toISOString()
     };
-    
-    // Update threads
-    setThreads(prev => {
-      const existing = prev.find(t => t.id === threadId);
-      if (existing) return prev;
-      return [...prev, thread];
-    });
-    
-    // Update project
-    setProjects(prev => prev.map(p => {
-      if (p.id === currentProject.id && !p.threads.includes(threadId)) {
-        return { ...p, threads: [...p.threads, threadId] };
-      }
-      return p;
-    }));
-    
-    // Save thread messages
-    localStorage.setItem(`thread_${threadId}_messages`, JSON.stringify(messages));
+    try {
+      await fetch('/api/threads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...thread, messages })
+      });
+      setThreads(prev => {
+        const existing = prev.find(t => t.id === threadId);
+        if (existing) return prev;
+        return [...prev, thread];
+      });
+      setProjects(prev => prev.map(p => {
+        if (p.id === currentProject.id && !p.threads.includes(threadId)) {
+          return { ...p, threads: [...p.threads, threadId] };
+        }
+        return p;
+      }));
+    } catch (error) {
+      console.error("Save Thread To Project error:", error);
+    }
   };
 
   // Handle file upload with 20MB limit
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
-
     setUploadingFile(true);
     const newFileIds: string[] = [];
     const successfulUploads: File[] = [];
     const failedUploads: string[] = [];
-
     try {
       for (const file of Array.from(files)) {
-        // Validate file size (20MB limit)
-        const MAX_SIZE = 20 * 1024 * 1024; // 20MB
+        const MAX_SIZE = 20 * 1024 * 1024;
         if (file.size > MAX_SIZE) {
           failedUploads.push(`${file.name} (exceeds 20MB limit)`);
           continue;
         }
-
         const formData = new FormData();
         formData.append('file', file);
         formData.append('purpose', 'assistants');
-
         try {
           const response = await fetch('/api/upload', {
             method: 'POST',
             body: formData,
           });
-
           if (!response.ok) {
             const error = await response.json();
             failedUploads.push(`${file.name} (${error.error || 'upload failed'})`);
             continue;
           }
-
           const data = await response.json();
           if (data.fileId) {
             newFileIds.push(data.fileId);
@@ -265,21 +225,15 @@ const ChatApp = () => {
           failedUploads.push(`${file.name} (network error)`);
         }
       }
-
-      // Update state with successful uploads
       if (successfulUploads.length > 0) {
         setFileIds(prev => [...prev, ...newFileIds]);
         setUploadedFiles(prev => [...prev, ...successfulUploads]);
-        
-        // Add success message
         setMessages(prev => [...prev, {
           role: "system",
           content: `✅ Successfully uploaded ${successfulUploads.length} file(s): ${successfulUploads.map(f => f.name).join(', ')}`,
           timestamp: new Date().toLocaleString()
         }]);
       }
-
-      // Show failed uploads if any
       if (failedUploads.length > 0) {
         setMessages(prev => [...prev, {
           role: "system",
@@ -287,7 +241,6 @@ const ChatApp = () => {
           timestamp: new Date().toLocaleString()
         }]);
       }
-
     } catch (error: any) {
       console.error("File upload error:", error);
       setMessages(prev => [...prev, {
@@ -312,16 +265,9 @@ const ChatApp = () => {
   // Send message function
   const sendMessage = async () => {
     if (activeRun || !input.trim()) return;
-
     setActiveRun(true);
     setLoading(true);
-    
-    // Set search indicator if web search is enabled
-    if (webSearchEnabled) {
-      setSearchInProgress(true);
-    }
-
-    // Add format preference to message if not default
+    if (webSearchEnabled) setSearchInProgress(true);
     let enhancedInput = input;
     if (formatPreference !== 'default') {
       const formatInstructions = {
@@ -330,7 +276,6 @@ const ChatApp = () => {
       };
       enhancedInput = input + formatInstructions[formatPreference];
     }
-
     const userMessage = {
       role: "user",
       content: input,
@@ -339,8 +284,6 @@ const ChatApp = () => {
     };
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
-
-    // Show search indicator message if enabled
     if (webSearchEnabled) {
       setMessages(prev => [...prev, {
         role: "system",
@@ -348,15 +291,11 @@ const ChatApp = () => {
         timestamp: new Date().toLocaleString()
       }]);
     }
-
     try {
       setTyping(true);
-
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: enhancedInput,
           threadId: threadId,
@@ -364,11 +303,7 @@ const ChatApp = () => {
           fileIds: fileIds.length > 0 ? fileIds : undefined
         }),
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const responseText = await response.text();
       let data;
       try {
@@ -377,34 +312,20 @@ const ChatApp = () => {
         console.error('Failed to parse JSON response:', responseText);
         throw new Error('Invalid JSON response from server');
       }
-
-      if (data.error) {
-        throw new Error(data.error);
-      }
-
-      // Update thread ID if we got a new one
+      if (data.error) throw new Error(data.error);
       if (data.threadId && data.threadId !== threadId) {
         setThreadId(data.threadId);
-        // Auto-save to current project
-        if (currentProject) {
-          saveThreadToProject();
-        }
+        if (currentProject) saveThreadToProject();
       }
-
-      // Remove search indicator message
       if (webSearchEnabled) {
         setMessages(prev => prev.filter(msg => 
           !(msg.role === "system" && msg.content.includes("Searching the web"))
         ));
       }
-
-      // Clear file IDs after successful message
       if (fileIds.length > 0) {
         setFileIds([]);
         setUploadedFiles([]);
       }
-
-      // Add assistant response to messages
       setMessages((prev) => [
         ...prev,
         { 
@@ -413,23 +334,15 @@ const ChatApp = () => {
           timestamp: new Date().toLocaleString() 
         },
       ]);
-
     } catch (error: any) {
       console.error("Error:", error);
-      
-      // Remove search indicator on error
       if (webSearchEnabled) {
         setMessages(prev => prev.filter(msg => 
           !(msg.role === "system" && msg.content.includes("Searching the web"))
         ));
       }
-      
       let errorMessage = "Unable to reach assistant.";
-      
-      if (error.message) {
-        errorMessage = error.message;
-      }
-
+      if (error.message) errorMessage = error.message;
       setMessages((prev) => [
         ...prev,
         {
@@ -466,8 +379,6 @@ const ChatApp = () => {
     setThreadId(null);
     setFileIds([]);
     setUploadedFiles([]);
-    localStorage.removeItem("threadId");
-    localStorage.removeItem("chatHistory");
   };
 
   // Start new chat in current project
@@ -476,11 +387,11 @@ const ChatApp = () => {
     setShowProjectPanel(false);
   };
 
-  return (
-    <div className="h-screen w-full flex flex-col bg-white md:flex-row">
-      {/* Desktop Sidebar / Mobile Menu */}
-      <AnimatePresence>
-        {(showProjectPanel || (!isMobile && projects.length > 0)) && (
+return (
+  <div className="h-screen w-full flex flex-col bg-white md:flex-row">
+    {/* Desktop Sidebar / Mobile Menu */}
+    <AnimatePresence>
+      {(showProjectPanel || (!isMobile && projects.length > 0)) && (
           <motion.div
             initial={{ x: isMobile ? -300 : 0 }}
             animate={{ x: 0 }}
