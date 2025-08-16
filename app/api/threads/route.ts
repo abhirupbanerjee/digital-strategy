@@ -7,11 +7,97 @@ export const runtime = 'nodejs';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_KEY! // server-only; never expose
+  process.env.SUPABASE_SERVICE_KEY!
 );
 
 function errorJson(message: string, status = 500, details?: unknown) {
   return NextResponse.json({ error: { message, ...(details ? { details } : {}) } }, { status });
+}
+
+// Helper function to extract text content from OpenAI message structure
+function extractTextFromOpenAIMessage(openAIMessage: any): string {
+  try {
+    if (!openAIMessage.content) {
+      return '[No content available]';
+    }
+
+    // Handle array of content items (most common format)
+    if (Array.isArray(openAIMessage.content)) {
+      const textParts: string[] = [];
+      
+      for (const contentItem of openAIMessage.content) {
+        if (contentItem.type === 'text') {
+          // Handle nested text structure
+          if (contentItem.text && typeof contentItem.text === 'object' && contentItem.text.value) {
+            textParts.push(contentItem.text.value);
+          } else if (typeof contentItem.text === 'string') {
+            textParts.push(contentItem.text);
+          }
+        } else if (contentItem.type === 'image_file') {
+          textParts.push('[Image file attached]');
+        } else if (contentItem.type === 'image_url') {
+          textParts.push('[Image URL attached]');
+        } else {
+          // Handle other content types (code interpreter results, etc.)
+          if (contentItem.text && typeof contentItem.text === 'string') {
+            textParts.push(contentItem.text);
+          } else if (typeof contentItem === 'string') {
+            textParts.push(contentItem);
+          }
+        }
+      }
+      
+      return textParts.length > 0 ? textParts.join('\n\n') : '[Content could not be processed]';
+    }
+    
+    // Handle direct string content
+    if (typeof openAIMessage.content === 'string') {
+      return openAIMessage.content;
+    }
+    
+    // Handle object with text property
+    if (typeof openAIMessage.content === 'object' && openAIMessage.content.text) {
+      if (typeof openAIMessage.content.text === 'string') {
+        return openAIMessage.content.text;
+      }
+      if (openAIMessage.content.text.value) {
+        return openAIMessage.content.text.value;
+      }
+    }
+    
+    // Fallback: try to stringify and extract meaningful content
+    const contentStr = JSON.stringify(openAIMessage.content);
+    console.warn('Unexpected content structure:', contentStr);
+    return '[Complex content - please check console for details]';
+    
+  } catch (error) {
+    console.error('Error extracting text from OpenAI message:', error);
+    return '[Error processing message content]';
+  }
+}
+
+// Helper function to process OpenAI messages into frontend format
+function processOpenAIMessages(openAIMessages: any[]): any[] {
+  return openAIMessages.map(msg => {
+    try {
+      return {
+        id: msg.id,
+        role: msg.role,
+        content: extractTextFromOpenAIMessage(msg),
+        timestamp: msg.created_at ? new Date(msg.created_at * 1000).toLocaleString() : undefined,
+        // Preserve any file attachments info if present
+        fileIds: msg.attachments?.map((att: any) => att.file_id) || undefined
+      };
+    } catch (error) {
+      console.error('Error processing OpenAI message:', msg.id, error);
+      return {
+        id: msg.id || 'unknown',
+        role: msg.role || 'assistant',
+        content: '[Error processing this message]',
+        timestamp: new Date().toLocaleString()
+      };
+    }
+  });
 }
 
 export async function GET(request: NextRequest) {
@@ -38,7 +124,6 @@ export async function GET(request: NextRequest) {
     Authorization: `Bearer ${process.env.OPENAI_API_KEY!}`,
     'OpenAI-Beta': 'assistants=v2',
     'Content-Type': 'application/json'
-    // 'OpenAI-Organization': process.env.OPENAI_ORG_ID ?? '',
   };
 
   const url = new URL(`https://api.openai.com/v1/threads/${threadId}/messages`);
@@ -54,10 +139,21 @@ export async function GET(request: NextRequest) {
     }
 
     const json = await response.json();
-    const messages = Array.isArray(json?.data) ? json.data : [];
+    const rawMessages = Array.isArray(json?.data) ? json.data : [];
+    
+    // 3) Process OpenAI messages to extract clean text content
+    const processedMessages = processOpenAIMessages(rawMessages);
+    
+    // Log for debugging (remove in production)
+    console.log(`Processed ${processedMessages.length} messages for thread ${threadId}`);
+    
+    return NextResponse.json({ 
+      thread: threadData, 
+      messages: processedMessages 
+    }, { status: 200 });
 
-    return NextResponse.json({ thread: threadData, messages }, { status: 200 });
   } catch (e) {
+    console.error('Failed to load messages:', e);
     return errorJson('Failed to load messages', 500, String(e));
   }
 }
@@ -79,13 +175,27 @@ export async function POST(request: NextRequest) {
   const nowIso = new Date().toISOString();
   const messageCount = Array.isArray(messages) ? messages.length : 0;
 
+  // Extract title from first user message if not provided
+  let threadTitle = title?.trim() || 'New Chat';
+  if ((!title || title.trim() === 'New Chat') && Array.isArray(messages) && messages.length > 0) {
+    const firstUserMessage = messages.find((msg: any) => msg.role === 'user');
+    if (firstUserMessage && firstUserMessage.content) {
+      // Extract text from content (in case it's an object)
+      let content = firstUserMessage.content;
+      if (typeof content === 'object') {
+        content = extractTextFromOpenAIMessage(firstUserMessage);
+      }
+      threadTitle = String(content).substring(0, 50).trim() || 'New Chat';
+    }
+  }
+
   const { data, error } = await supabase
     .from('threads')
     .upsert(
       {
-        id, // ensure this is your PK; otherwise use `onConflict` with your unique column
+        id,
         project_id: projectId,
-        title: title?.trim() || 'New Chat',
+        title: threadTitle,
         last_activity: nowIso,
         message_count: messageCount
       },

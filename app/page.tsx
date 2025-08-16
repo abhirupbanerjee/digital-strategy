@@ -6,16 +6,13 @@ import { motion, AnimatePresence } from "framer-motion";
 import remarkGfm from "remark-gfm";
 import { useMemo } from "react";
 
-
 const randomColor = () => `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0')}`;
-// unique marker so we only remove *our* search placeholder
 const SEARCH_FLAG = '___WEB_SEARCH_IN_PROGRESS___';
-
 
 // Define types
 interface Message {
   role: string;
-  content: string;
+  content: string | any; // Allow both string and object content
   timestamp?: string;
   fileIds?: string[];
 }
@@ -37,8 +34,61 @@ interface Thread {
   createdAt: string;
 }
 
+interface ShareLink {
+  id: string;
+  share_token: string;
+  permissions: 'read' | 'collaborate';
+  expires_at: string;
+  created_at: string;
+  shareUrl: string;
+}
+
+// First, add this helper function at the top of your component (after the interfaces):
+const extractTextContent = (content: any): string => {
+  // If content is already a string, return it
+  if (typeof content === 'string') {
+    return content;
+  }
+  
+  // If content is an object (like OpenAI structured response)
+  if (typeof content === 'object' && content !== null) {
+    // Handle OpenAI message content structure
+    if (Array.isArray(content)) {
+      return content
+        .map(item => {
+          if (typeof item === 'string') return item;
+          if (item.type === 'text' && item.text) return item.text;
+          if (item.text && typeof item.text === 'string') return item.text;
+          return '';
+        })
+        .filter(Boolean)
+        .join('\n');
+    }
+    
+    // Handle single object with text property
+    if (content.text && typeof content.text === 'string') {
+      return content.text;
+    }
+    
+    // Handle direct text property
+    if (typeof content.content === 'string') {
+      return content.content;
+    }
+    
+    // Fallback: stringify the object
+    try {
+      return JSON.stringify(content, null, 2);
+    } catch {
+      return '[Complex content - cannot display]';
+    }
+  }
+  
+  // Fallback for any other type
+  return String(content || '');
+};
+
 const ChatApp = () => {
-  // States
+  // Main States
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [threadId, setThreadId] = useState<string | null>(null);
@@ -61,12 +111,23 @@ const ChatApp = () => {
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectDescription, setNewProjectDescription] = useState("");
   
+  // Share States (consolidated - removed duplicates)
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareLinks, setShareLinks] = useState<ShareLink[]>([]);
+  const [sharePermissions, setSharePermissions] = useState<'read' | 'collaborate'>('read');
+  const [shareExpiryDays, setShareExpiryDays] = useState(1);
+  const [creatingShare, setCreatingShare] = useState(false);
+  
   // Mobile UI States
   const [isMobile, setIsMobile] = useState(false);
-  //const [showMobileMenu, setShowMobileMenu] = useState(false);
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+
+  // Add these state variables to your component:
+  const [showCopyModal, setShowCopyModal] = useState(false);
+  const [copyOptions, setCopyOptions] = useState<{ label: string; content: string; type: string }[]>([]);
 
   // Check for mobile device
   useEffect(() => {
@@ -78,25 +139,22 @@ const ChatApp = () => {
 
   // Initial load from API
   useEffect(() => {
-  fetch('/api/projects')
-    .then(res => res.json())
-    .then(data => {
-      // normalize projects so `threads` is always string[]
-      const normalized = (data.projects || []).map((p: any) => ({
-      ...p,
-      threads: Array.isArray(p.threads) ? p.threads.map((t: any) => t.id) : (p.threads || [])
-      }));
-      setProjects(normalized);
+    fetch('/api/projects')
+      .then(res => res.json())
+      .then(data => {
+        const normalized = (data.projects || []).map((p: any) => ({
+          ...p,
+          threads: Array.isArray(p.threads) ? p.threads.map((t: any) => t.id) : (p.threads || [])
+        }));
+        setProjects(normalized);
 
-      if (!data.projects || data.projects.length === 0) {
-        setShowProjectPanel(true);      // make sidebar visible
-        setShowNewProjectModal(true);   // prompt user to create first project
-      }
-    })
-    .catch(err => console.error('Error loading projects:', err));
-}, []);
-
-
+        if (!data.projects || data.projects.length === 0) {
+          setShowProjectPanel(true);
+          setShowNewProjectModal(true);
+        }
+      })
+      .catch(err => console.error('Error loading projects:', err));
+  }, []);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -106,81 +164,101 @@ const ChatApp = () => {
     });
   }, [messages]);
 
+  // Load shares when modal opens
+  useEffect(() => {
+    if (currentProject && showShareModal) {
+      loadProjectShares(currentProject.id);
+    }
+  }, [currentProject, showShareModal]);
+
+
+  // Additional safety check in the initial projects loading:
+useEffect(() => {
+  fetch('/api/projects')
+    .then(res => res.json())
+    .then(data => {
+      // Ensure all projects have threads array
+      const normalized = (data.projects || []).map((p: any) => ({
+        ...p,
+        threads: Array.isArray(p.threads) ? p.threads.map((t: any) => typeof t === 'string' ? t : t.id) : []
+      }));
+      setProjects(normalized);
+
+      if (!data.projects || data.projects.length === 0) {
+        setShowProjectPanel(true);
+        setShowNewProjectModal(true);
+      }
+    })
+    .catch(err => console.error('Error loading projects:', err));
+}, []);
+
   // Project Management Functions
   const createProject = async () => {
-  if (!newProjectName.trim()) return;
-  try {
+    if (!newProjectName.trim()) return;
+    try {
       const res = await fetch('/api/projects', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: newProjectName,
-        description: newProjectDescription,
-        color: randomColor()
-      })
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newProjectName,
+          description: newProjectDescription,
+          color: randomColor()
+        })
+      });
+      if (!res.ok) throw new Error('Failed to create project');
+      const payload = await res.json();
+      const created = payload.project ?? payload;
+      setProjects(prev => [...prev, created]);
+      setCurrentProject(created);
+      setNewProjectName('');
+      setNewProjectDescription('');
+      setShowNewProjectModal(false);
+      setShowProjectPanel(true);
+    } catch (err) {
+      console.error('Create Project error:', err);
+    }
+  };
+
+  const currentProjectThreadIdSet = useMemo(
+    () => new Set(currentProject?.threads ?? []),
+    [currentProject]
+  );
+  
+  const loadProject = async (projectId: string) => {
+    const response = await fetch(`/api/projects/${projectId}`);
+    if (!response.ok) throw new Error('Failed to load project');
+    const data = await response.json();
+
+    const threadObjs = Array.isArray(data.threads) ? data.threads : [];
+    const threadIds = threadObjs.map((t: any) => t.id);
+
+    setCurrentProject({ ...data, threads: threadIds });
+
+    setThreads(prev => {
+      const next = [
+        ...prev.filter(t => !threadIds.includes(t.id)),
+        ...threadObjs.map((t: any) => ({
+          id: t.id,
+          projectId: data.id,
+          title: t.title ?? 'Untitled',
+          lastMessage: '',
+          createdAt: t.created_at ?? new Date().toISOString()
+        }))
+      ];
+      return next;
     });
-    if (!res.ok) throw new Error('Failed to create project');
-    const payload = await res.json();
-    const created = payload.project ?? payload; // supports {project: {...}} and raw row
-    setProjects(prev => [...prev, created]);
-    setCurrentProject(created);
-    setNewProjectName('');
-    setNewProjectDescription('');
-    setShowNewProjectModal(false);
-    setShowProjectPanel(true); // ensure sidebar remains visible on desktop & mobile
-  } catch (err) {
-    console.error('Create Project error:', err);
-  }
-};
 
-const currentProjectThreadIdSet = useMemo(
-  () => new Set(currentProject?.threads ?? []),
-  [currentProject]
-);  
-
-const loadProject = async (projectId: string) => {
-  const response = await fetch(`/api/projects/${projectId}`);
-  if (!response.ok) throw new Error('Failed to load project');
-  const data = await response.json();
-
-  // Normalize threads: objects -> ids
-  const threadObjs = Array.isArray(data.threads) ? data.threads : [];
-  const threadIds = threadObjs.map((t: any) => t.id);
-
-  setCurrentProject({ ...data, threads: threadIds });
-
-  // Hydrate local `threads` for sidebar rendering (see #5)
-  setThreads(prev => {
-  const next = [
-    ...prev.filter(t => !threadIds.includes(t.id)),
-    ...threadObjs.map((t: any) => ({
-      id: t.id,
-      projectId: data.id,
-      title: t.title ?? 'Untitled',
-      lastMessage: '',
-      createdAt: t.created_at ?? new Date().toISOString()
-    }))
-  ];
-  return next;
-});
-
-
-  if (threadIds.length > 0) {
-    await loadThread(threadIds[0]);
-  } else {
-    setMessages([]);
-    setThreadId(null);
-  }
-};
-
-
+    if (threadIds.length > 0) {
+      await loadThread(threadIds[0]);
+    } else {
+      setMessages([]);
+      setThreadId(null);
+    }
+  };
 
   const selectProject = (project: Project) => {
-  // Always load fresh (and hydrate `threads`) from the server
-  loadProject(project.id);
-};
-
-
+    loadProject(project.id);
+  };
 
   const loadThread = async (threadId: string) => {
     try {
@@ -194,38 +272,328 @@ const loadProject = async (projectId: string) => {
     }
   };
 
-  const saveThreadToProject = async () => {
-    if (!threadId || !currentProject) return;
-    const thread: Thread = {
-      id: threadId,
-      projectId: currentProject.id,
-      title: messages[0]?.content.substring(0, 50) || "New Chat",
-      lastMessage: messages[messages.length - 1]?.content.substring(0, 100),
-      createdAt: new Date().toISOString()
-    };
-    try {
-      await fetch('/api/threads', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...thread, messages })
-      });
-      setThreads(prev => {
-        const existing = prev.find(t => t.id === threadId);
-        if (existing) return prev;
-        return [...prev, thread];
-      });
+  
+    const saveThreadToProjectWithId = async (newThreadId: string) => {
+  if (!currentProject) return;
+  
+  const thread: Thread = {
+    id: newThreadId,
+    projectId: currentProject.id,
+    title: messages[0]?.content.substring(0, 50) || "New Chat",
+    lastMessage: messages[messages.length - 1]?.content.substring(0, 100),
+    createdAt: new Date().toISOString()
+  };
+  
+  try {
+    const response = await fetch('/api/threads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...thread, messages })
+    });
+    
+    if (response.ok) {
+      // Update local threads state
+      setThreads(prev => [...prev.filter(t => t.id !== newThreadId), thread]);
+      
+      // Update projects state with null checks
       setProjects(prev => prev.map(p => {
-        if (p.id === currentProject.id && !p.threads.includes(threadId)) {
-          return { ...p, threads: [...p.threads, threadId] };
+        if (p.id === currentProject.id) {
+          // Ensure threads array exists and check if thread is already included
+          const currentThreads = Array.isArray(p.threads) ? p.threads : [];
+          if (!currentThreads.includes(newThreadId)) {
+            return { ...p, threads: [...currentThreads, newThreadId] };
+          }
         }
         return p;
       }));
+      
+      console.log('Thread saved successfully:', newThreadId);
+    } else {
+      console.error('Failed to save thread:', await response.text());
+    }
+  } catch (error) {
+    console.error("Save Thread To Project error:", error);
+  }
+};
+  
+  const saveThreadToProject = async () => {
+  if (!threadId || !currentProject) return;
+  
+  const thread: Thread = {
+    id: threadId,
+    projectId: currentProject.id,
+    title: messages[0]?.content.substring(0, 50) || "New Chat",
+    lastMessage: messages[messages.length - 1]?.content.substring(0, 100),
+    createdAt: new Date().toISOString()
+  };
+  
+  try {
+    await fetch('/api/threads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...thread, messages })
+    });
+    
+    setThreads(prev => {
+      const existing = prev.find(t => t.id === threadId);
+      if (existing) return prev;
+      return [...prev, thread];
+    });
+    
+    setProjects(prev => prev.map(p => {
+      if (p.id === currentProject.id) {
+        // Ensure threads array exists
+        const currentThreads = Array.isArray(p.threads) ? p.threads : [];
+        if (!currentThreads.includes(threadId)) {
+          return { ...p, threads: [...currentThreads, threadId] };
+        }
+      }
+      return p;
+    }));
+  } catch (error) {
+    console.error("Save Thread To Project error:", error);
+  }
+};
+
+
+  // Share Functions (fixed API paths)
+  const loadProjectShares = async (projectId: string) => {
+    try {
+      const response = await fetch(`/api/projects/${projectId}/shares`); // Fixed: /shares
+      if (response.ok) {
+        const data = await response.json();
+        setShareLinks(data.shares || []);
+      }
     } catch (error) {
-      console.error("Save Thread To Project error:", error);
+      console.error('Load shares error:', error);
     }
   };
 
-  // Handle file upload with 20MB limit
+  const createShareLink = async () => {
+    if (!currentProject || creatingShare) return;
+    
+    setCreatingShare(true);
+    try {
+      const response = await fetch(`/api/projects/${currentProject.id}/shares`, { // Fixed: /shares
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          permissions: sharePermissions,
+          expiryDays: shareExpiryDays
+        })
+      });
+
+      if (!response.ok) throw new Error('Failed to create share link');
+      
+      const data = await response.json();
+      
+      await navigator.clipboard.writeText(data.shareUrl);
+      alert(`Share link created and copied!\nExpires: ${new Date(data.expiresAt).toLocaleString()}`);
+      
+      loadProjectShares(currentProject.id);
+      
+    } catch (error) {
+      console.error('Create share error:', error);
+      alert('Failed to create share link');
+    } finally {
+      setCreatingShare(false);
+    }
+  };
+
+  const revokeShareLink = async (shareToken: string) => {
+    if (!currentProject || !confirm('Revoke this share link?')) return;
+    
+    try {
+      const response = await fetch(`/api/projects/${currentProject.id}/shares?token=${shareToken}`, { // Fixed: /shares
+        method: 'DELETE'
+      });
+
+      if (!response.ok) throw new Error('Failed to revoke share');
+      loadProjectShares(currentProject.id);
+      
+    } catch (error) {
+      console.error('Revoke share error:', error);
+      alert('Failed to revoke share link');
+    }
+  };
+
+  const copyShareLink = async (shareUrl: string) => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      alert('Share link copied to clipboard!');
+    } catch (error) {
+      console.error('Copy error:', error);
+    }
+  };
+
+  // 1. Function to copy the last bot response
+const copyLastBotResponse = async () => {
+  try {
+    // Find the last assistant message
+    const lastBotMessage = messages
+      .slice()
+      .reverse()
+      .find(msg => msg.role === "assistant");
+    
+    if (!lastBotMessage) {
+      alert("No bot response found to copy.");
+      return;
+    }
+    
+    const content = extractTextContent(lastBotMessage.content);
+    await navigator.clipboard.writeText(content);
+    alert("Last bot response copied to clipboard!");
+  } catch (error) {
+    console.error("Failed to copy last response:", error);
+    alert("Failed to copy response to clipboard.");
+  }
+};
+
+// 2. Function to extract and copy tables from content
+const extractTables = (content: string): string[] => {
+  const tables: string[] = [];
+  
+  // Extract markdown tables (format: | col1 | col2 |)
+  const tableRegex = /\|[^|\n]*\|[^|\n]*\|[\s\S]*?(?=\n\n|\n$|$)/g;
+  const markdownTables = content.match(tableRegex);
+  
+  if (markdownTables) {
+    tables.push(...markdownTables.map(table => table.trim()));
+  }
+  
+  return tables;
+};
+
+// 3. Function to extract and copy diagrams/code blocks
+const extractCodeBlocks = (content: string): string[] => {
+  const codeBlocks: string[] = [];
+  
+  // Extract code blocks (```language ... ```)
+  const codeRegex = /```[\s\S]*?```/g;
+  const matches = content.match(codeRegex);
+  
+  if (matches) {
+    codeBlocks.push(...matches.map(block => block.trim()));
+  }
+  
+  return codeBlocks;
+};
+
+// 4. Function to extract lists
+const extractLists = (content: string): string[] => {
+  const lists: string[] = [];
+  
+  // Extract numbered lists
+  const numberedListRegex = /(?:^|\n)((?:\d+\.\s+[^\n]+(?:\n(?:\s{2,}[^\n]+|\d+\.\s+[^\n]+))*)+)/gm;
+  const numberedMatches = content.match(numberedListRegex);
+  
+  if (numberedMatches) {
+    lists.push(...numberedMatches.map(list => list.trim()));
+  }
+  
+  // Extract bullet lists
+  const bulletListRegex = /(?:^|\n)((?:[*-]\s+[^\n]+(?:\n(?:\s{2,}[^\n]+|[*-]\s+[^\n]+))*)+)/gm;
+  const bulletMatches = content.match(bulletListRegex);
+  
+  if (bulletMatches) {
+    lists.push(...bulletMatches.map(list => list.trim()));
+  }
+  
+  return lists;
+};
+
+// 5. Main function to copy embedded content with selection
+const copyEmbeddedContent = async () => {
+  try {
+    // Find the last assistant message
+    const lastBotMessage = messages
+      .slice()
+      .reverse()
+      .find(msg => msg.role === "assistant");
+    
+    if (!lastBotMessage) {
+      alert("No bot response found.");
+      return;
+    }
+    
+    const content = extractTextContent(lastBotMessage.content);
+    
+    // Extract different types of content
+    const tables = extractTables(content);
+    const codeBlocks = extractCodeBlocks(content);
+    const lists = extractLists(content);
+    
+    // Create options for user to choose from
+    const options: { label: string; content: string; type: string }[] = [];
+    
+    // Add full response option
+    options.push({
+      label: "📄 Full Response",
+      content: content,
+      type: "full"
+    });
+    
+    // Add tables
+    tables.forEach((table, index) => {
+      const preview = table.split('\n')[0].substring(0, 50) + '...';
+      options.push({
+        label: `📊 Table ${index + 1}: ${preview}`,
+        content: table,
+        type: "table"
+      });
+    });
+    
+    // Add code blocks
+    codeBlocks.forEach((code, index) => {
+      const firstLine = code.split('\n')[0].replace(/```\w*/, '').substring(0, 30);
+      options.push({
+        label: `💻 Code Block ${index + 1}: ${firstLine}...`,
+        content: code,
+        type: "code"
+      });
+    });
+    
+    // Add lists
+    lists.forEach((list, index) => {
+      const firstItem = list.split('\n')[0].substring(0, 40) + '...';
+      options.push({
+        label: `📋 List ${index + 1}: ${firstItem}`,
+        content: list,
+        type: "list"
+      });
+    });
+    
+    if (options.length === 1) {
+      // Only full response available
+      await navigator.clipboard.writeText(content);
+      alert("Full response copied to clipboard!");
+      return;
+    }
+    
+    // Show selection modal
+    setShowCopyModal(true);
+    setCopyOptions(options);
+    
+  } catch (error) {
+    console.error("Failed to extract content:", error);
+    alert("Failed to extract content.");
+  }
+};
+
+// 6. Function to copy selected content
+const copySelectedContent = async (content: string, label: string) => {
+  try {
+    await navigator.clipboard.writeText(content);
+    alert(`${label} copied to clipboard!`);
+    setShowCopyModal(false);
+  } catch (error) {
+    console.error("Failed to copy content:", error);
+    alert("Failed to copy content to clipboard.");
+  }
+};
+
+
+  // File handling functions (unchanged)
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
@@ -293,28 +661,29 @@ const loadProject = async (projectId: string) => {
     }
   };
 
-  // Remove individual file
   const removeFile = (index: number) => {
     setUploadedFiles(prev => prev.filter((_, i) => i !== index));
     setFileIds(prev => prev.filter((_, i) => i !== index));
   };
 
-
-
-  // Send message function
+  // Send message function (unchanged)
   const sendMessage = async () => {
     if (activeRun || !input.trim()) return;
     setActiveRun(true);
     setLoading(true);
+    
     if (webSearchEnabled) setSearchInProgress(true);
     let enhancedInput = input;
+    
     if (formatPreference !== 'default') {
       const formatInstructions = {
         bullets: '\n\n[Format: Please structure your response using bullet points where appropriate]',
         table: '\n\n[Format: Please use tables to organize data when applicable]'
       };
+    
       enhancedInput = input + formatInstructions[formatPreference];
     }
+    
     const userMessage = {
       role: "user",
       content: input,
@@ -325,13 +694,13 @@ const loadProject = async (projectId: string) => {
     setInput("");
     if (webSearchEnabled) {
       setMessages(prev => [
-      ...prev,
-      {
-        role: "system",
-        content: `🔍 Searching the web for current information... ${SEARCH_FLAG}`,
-        timestamp: new Date().toLocaleString(),
-      }
-    ]);
+        ...prev,
+        {
+          role: "system",
+          content: `🔍 Searching the web for current information... ${SEARCH_FLAG}`,
+          timestamp: new Date().toLocaleString(),
+        }
+      ]);
     } 
 
     try {
@@ -358,14 +727,18 @@ const loadProject = async (projectId: string) => {
       }
 
       if (data.error) throw new Error(data.error);
+
       if (data.threadId && data.threadId !== threadId) {
         setThreadId(data.threadId);
-        if (currentProject) saveThreadToProject();
+        if (currentProject) {
+          // Save immediately with the NEW threadId from API response
+          saveThreadToProjectWithId(data.threadId);
+        }
       }
 
       if (webSearchEnabled) {
         setMessages(prev => prev.filter(msg =>
-         !(msg.role === "system" && typeof msg.content === 'string' && msg.content.includes(SEARCH_FLAG))
+          !(msg.role === "system" && typeof msg.content === 'string' && msg.content.includes(SEARCH_FLAG))
         ));
       }
 
@@ -386,7 +759,7 @@ const loadProject = async (projectId: string) => {
 
       if (webSearchEnabled) {
         setMessages(prev => prev.filter(msg =>
-         !(msg.role === "system" && typeof msg.content === 'string' && msg.content.includes(SEARCH_FLAG))
+          !(msg.role === "system" && typeof msg.content === 'string' && msg.content.includes(SEARCH_FLAG))
         ));
       }
       
@@ -408,7 +781,7 @@ const loadProject = async (projectId: string) => {
     }
   };
 
-  // Copy chat to clipboard
+  // Utility functions
   const copyChatToClipboard = async () => {
     const chatText = messages
       .map((msg) => `${msg.timestamp} - ${msg.role === "user" ? "You" : msg.role === "system" ? "System" : "Digital Strategy Bot"}:\n${msg.content}`)
@@ -422,7 +795,6 @@ const loadProject = async (projectId: string) => {
     }
   };
 
-  // Clear all data
   const clearChat = () => {
     setMessages([]);
     setThreadId(null);
@@ -430,17 +802,16 @@ const loadProject = async (projectId: string) => {
     setUploadedFiles([]);
   };
 
-  // Start new chat in current project
   const startNewChat = () => {
     clearChat();
     setShowProjectPanel(false);
   };
 
-return (
-  <div className="h-screen w-full flex flex-col bg-white md:flex-row">
-    {/* Desktop Sidebar / Mobile Menu */}
-    <AnimatePresence>
-      {(showProjectPanel || !isMobile) && (
+  return (
+    <div className="h-screen w-full flex flex-col bg-white md:flex-row">
+      {/* Desktop Sidebar / Mobile Menu */}
+      <AnimatePresence>
+        {(showProjectPanel || !isMobile) && (
           <motion.div
             initial={{ x: isMobile ? -300 : 0 }}
             animate={{ x: 0 }}
@@ -462,6 +833,14 @@ return (
                   >
                     + New
                   </button>
+                  {currentProject && (
+                    <button
+                      onClick={() => setShowShareModal(true)}
+                      className="text-blue-600 hover:text-blue-700 text-sm"
+                    >
+                      🔗 Share
+                    </button>
+                  )}
                   {isMobile && (
                     <button
                       onClick={() => setShowProjectPanel(false)}
@@ -585,7 +964,7 @@ return (
           )}
         </header>
 
-        {/* Chat Container */}
+        {/* Chat Container - keeping the existing markdown rendering */}
         <div className="flex-grow flex flex-col p-2 md:p-4">
           <div
             ref={chatContainerRef}
@@ -608,98 +987,92 @@ return (
                       : "bg-white text-black border"
                   }`}
                 >
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      // Headers with OpenAI-style formatting
-                      h1: ({ children, ...props }) => (
-                        <h1 className="text-xl md:text-2xl font-bold mt-4 md:mt-6 mb-3 md:mb-4 text-gray-900" {...props}>{children}</h1>
-                      ),
-                      h2: ({ children, ...props }) => (
-                        <h2 className="text-lg md:text-xl font-semibold mt-3 md:mt-5 mb-2 md:mb-3 text-gray-800" {...props}>{children}</h2>
-                      ),
-                      h3: ({ children, ...props }) => (
-                        <h3 className="text-base md:text-lg font-semibold mt-3 md:mt-4 mb-2 text-gray-800" {...props}>{children}</h3>
-                      ),
-                      // Paragraphs
-                      p: ({ children, ...props }) => (
-                        <p className="mb-3 md:mb-4 leading-relaxed text-sm md:text-base text-gray-700" {...props}>{children}</p>
-                      ),
-                      // Links with citation support
-                      a: ({ href, children, ...props }) => {
-                        const isCitation = href?.startsWith('http');
-                        return (
-                          <a 
-                            href={href} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className={isCitation 
-                              ? "text-blue-600 hover:text-blue-800 underline decoration-1 hover:decoration-2 transition-colors"
-                              : "text-blue-600 hover:text-blue-800 underline"
-                            }
-                            {...props}
-                          >
-                            {children}
-                            {isCitation && <span className="text-xs ml-1">↗</span>}
-                          </a>
-                        );
-                      },
-                      // Code blocks
-                      code: ({ inline, className, children, ...props }: any) => {
-                        return !inline ? (
-                          <pre className="bg-gray-900 text-gray-100 rounded-lg p-3 md:p-4 overflow-x-auto mb-3 md:mb-4 text-xs md:text-sm">
-                            <code className={className} {...props}>
-                              {children}
-                            </code>
-                          </pre>
-                        ) : (
-                          <code className="bg-gray-100 text-red-600 px-1 py-0.5 rounded text-xs md:text-sm font-mono" {...props}>
-                            {children}
-                          </code>
-                        );
-                      },
-                      // Lists
-                      ul: ({ children, ...props }) => (
-                        <ul className="list-disc pl-5 md:pl-6 mb-3 md:mb-4 space-y-1 md:space-y-2 text-sm md:text-base" {...props}>{children}</ul>
-                      ),
-                      ol: ({ children, ...props }) => (
-                        <ol className="list-decimal pl-5 md:pl-6 mb-3 md:mb-4 space-y-1 md:space-y-2 text-sm md:text-base" {...props}>{children}</ol>
-                      ),
-                      li: ({ children, ...props }) => (
-                        <li className="text-gray-700 leading-relaxed text-sm md:text-base" {...props}>{children}</li>
-                      ),
-                      // Tables
-                      table: ({ children, ...props }) => (
-                        <div className="overflow-x-auto mb-3 md:mb-4">
-                          <table className="min-w-full border-collapse border border-gray-300 text-sm md:text-base" {...props}>
-                            {children}
-                          </table>
-                        </div>
-                      ),
-                      th: ({ children, ...props }) => (
-                        <th className="border border-gray-300 px-2 md:px-4 py-1 md:py-2 text-left font-semibold text-gray-900 bg-gray-100 text-sm md:text-base" {...props}>
-                          {children}
-                        </th>
-                      ),
-                      td: ({ children, ...props }) => (
-                        <td className="border border-gray-300 px-2 md:px-4 py-1 md:py-2 text-gray-700 text-sm md:text-base" {...props}>
-                          {children}
-                        </td>
-                      ),
-                      // Blockquotes
-                      blockquote: ({ children, ...props }) => (
-                        <blockquote className="border-l-4 border-gray-300 pl-3 md:pl-4 py-2 mb-3 md:mb-4 italic text-gray-600 text-sm md:text-base" {...props}>
-                          {children}
-                        </blockquote>
-                      ),
-                      // Strong/Bold
-                      strong: ({ children, ...props }) => (
-                        <strong className="font-semibold text-gray-900" {...props}>{children}</strong>
-                      ),
-                    }}
-                  >
-                    {msg.content}
-                  </ReactMarkdown>
+                <ReactMarkdown
+  remarkPlugins={[remarkGfm]}
+  components={{
+    // Headers with OpenAI-style formatting
+    h1: ({ children, ...props }) => (
+      <h1 className="text-xl md:text-2xl font-bold mt-4 md:mt-6 mb-3 md:mb-4 text-gray-900" {...props}>{children}</h1>
+    ),
+    h2: ({ children, ...props }) => (
+      <h2 className="text-lg md:text-xl font-semibold mt-3 md:mt-5 mb-2 md:mb-3 text-gray-800" {...props}>{children}</h2>
+    ),
+    h3: ({ children, ...props }) => (
+      <h3 className="text-base md:text-lg font-semibold mt-3 md:mt-4 mb-2 text-gray-800" {...props}>{children}</h3>
+    ),
+    p: ({ children, ...props }) => (
+      <p className="mb-3 md:mb-4 leading-relaxed text-sm md:text-base text-gray-700" {...props}>{children}</p>
+    ),
+    a: ({ href, children, ...props }) => {
+      const isCitation = href?.startsWith('http');
+      return (
+        <a 
+          href={href} 
+          target="_blank" 
+          rel="noopener noreferrer"
+          className={isCitation 
+            ? "text-blue-600 hover:text-blue-800 underline decoration-1 hover:decoration-2 transition-colors"
+            : "text-blue-600 hover:text-blue-800 underline"
+          }
+          {...props}
+        >
+          {children}
+          {isCitation && <span className="text-xs ml-1">↗</span>}
+        </a>
+      );
+    },
+    code: ({ inline, className, children, ...props }: any) => {
+      return !inline ? (
+        <pre className="bg-gray-900 text-gray-100 rounded-lg p-3 md:p-4 overflow-x-auto mb-3 md:mb-4 text-xs md:text-sm">
+          <code className={className} {...props}>
+            {children}
+          </code>
+        </pre>
+      ) : (
+        <code className="bg-gray-100 text-red-600 px-1 py-0.5 rounded text-xs md:text-sm font-mono" {...props}>
+          {children}
+        </code>
+      );
+    },
+    ul: ({ children, ...props }) => (
+      <ul className="list-disc pl-5 md:pl-6 mb-3 md:mb-4 space-y-1 md:space-y-2 text-sm md:text-base" {...props}>{children}</ul>
+    ),
+    ol: ({ children, ...props }) => (
+      <ol className="list-decimal pl-5 md:pl-6 mb-3 md:mb-4 space-y-1 md:space-y-2 text-sm md:text-base" {...props}>{children}</ol>
+    ),
+    li: ({ children, ...props }) => (
+      <li className="text-gray-700 leading-relaxed text-sm md:text-base" {...props}>{children}</li>
+    ),
+    table: ({ children, ...props }) => (
+      <div className="overflow-x-auto mb-3 md:mb-4">
+        <table className="min-w-full border-collapse border border-gray-300 text-sm md:text-base" {...props}>
+          {children}
+        </table>
+      </div>
+    ),
+    th: ({ children, ...props }) => (
+      <th className="border border-gray-300 px-2 md:px-4 py-1 md:py-2 text-left font-semibold text-gray-900 bg-gray-100 text-sm md:text-base" {...props}>
+        {children}
+      </th>
+    ),
+    td: ({ children, ...props }) => (
+      <td className="border border-gray-300 px-2 md:px-4 py-1 md:py-2 text-gray-700 text-sm md:text-base" {...props}>
+        {children}
+      </td>
+    ),
+    blockquote: ({ children, ...props }) => (
+      <blockquote className="border-l-4 border-gray-300 pl-3 md:pl-4 py-2 mb-3 md:mb-4 italic text-gray-600 text-sm md:text-base" {...props}>
+        {children}
+      </blockquote>
+    ),
+    strong: ({ children, ...props }) => (
+      <strong className="font-semibold text-gray-900" {...props}>{children}</strong>
+    ),
+  }}
+>
+  {extractTextContent(msg.content)}
+
+</ReactMarkdown>  
                 </div>
               </motion.div>
             ))}
@@ -922,27 +1295,52 @@ return (
             <div className="flex gap-2">
               {!isMobile && (
                 <>
-                  <button
-                    className="flex-1 py-2 px-3 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg text-sm font-medium transition-colors"
-                    onClick={copyChatToClipboard}
+                <button
+                  className="flex-1 py-2 px-3 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm font-medium transition-colors"
+                  onClick={copyLastBotResponse}
                   >
-                    Copy Chat
+                  📋 Copy Last Response
+                 </button>
+                <button
+                  className="flex-1 py-2 px-3 bg-purple-500 hover:bg-purple-600 text-white rounded-lg text-sm font-medium transition-colors"
+                  onClick={copyEmbeddedContent}
+                  >
+                  📊 Copy Content
+                </button>
+                <button
+                  className="flex-1 py-2 px-3 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg text-sm font-medium transition-colors"
+                   onClick={copyChatToClipboard}
+                  >
+                  💬 Copy Chat
                   </button>
                   <button
                     className="flex-1 py-2 px-3 bg-red-400 hover:bg-red-500 text-white rounded-lg text-sm font-medium transition-colors"
                     onClick={clearChat}
-                  >
-                    Clear Chat
+                    >
+                   🗑️ Clear Chat
                   </button>
-                </>
+                   </>
               )}
+              
               {isMobile && (
                 <div className="flex gap-2 w-full">
                   <button
                     className="flex-1 py-2 px-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-sm"
+                    onClick={copyLastBotResponse}
+                  >
+                    📋 Last
+                  </button>
+                  <button
+                    className="flex-1 py-2 px-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-sm"
+                    onClick={copyEmbeddedContent}
+                  >
+                    📊 Content
+                  </button>
+                  <button
+                    className="flex-1 py-2 px-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-sm"
                     onClick={copyChatToClipboard}
                   >
-                    📋 Copy
+                    💬 All
                   </button>
                   <button
                     className="flex-1 py-2 px-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-sm"
@@ -1025,6 +1423,201 @@ return (
                   className="flex-1 py-2 px-4 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50"
                 >
                   Create Project
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      
+      {/* Share Modal - Inline Implementation */}
+      <AnimatePresence>
+        {showShareModal && currentProject && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+            onClick={() => setShowShareModal(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-lg p-6 max-w-lg w-full max-h-[80vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                <span>🔗</span>
+                Share "{currentProject.name}"
+              </h3>
+              
+              {/* Create New Share */}
+              <div className="bg-gray-50 p-4 rounded-lg mb-4">
+                <h4 className="font-medium mb-3">Create New Share Link</h4>
+                
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Access Level
+                    </label>
+                    <select
+                      value={sharePermissions}
+                      onChange={(e) => setSharePermissions(e.target.value as 'read' | 'collaborate')}
+                      className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="read">👁️ Read Only - Can view conversations</option>
+                      <option value="collaborate">✏️ Collaborate - Can chat and contribute</option>
+                    </select>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Expires In
+                    </label>
+                    <select
+                      value={shareExpiryDays}
+                      onChange={(e) => setShareExpiryDays(Number(e.target.value))}
+                      className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value={1}>1 Day (Default)</option>
+                      <option value={3}>3 Days</option>
+                      <option value={7}>1 Week</option>
+                      <option value={14}>2 Weeks</option>
+                      <option value={30}>1 Month</option>
+                    </select>
+                  </div>
+                  
+                  <button
+                    onClick={createShareLink}
+                    disabled={creatingShare}
+                    className="w-full py-2 px-4 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 font-medium"
+                  >
+                    {creatingShare ? 'Creating...' : '🔗 Create & Copy Link'}
+                  </button>
+                </div>
+              </div>
+              
+              {/* Existing Shares */}
+              <div>
+                <h4 className="font-medium mb-3">Active Share Links ({shareLinks.length})</h4>
+                
+                {shareLinks.length === 0 ? (
+                  <p className="text-gray-500 text-sm text-center py-4">
+                    No active share links. Create one above.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {shareLinks.map((share) => {
+                      const isExpired = new Date(share.expires_at) < new Date();
+                      return (
+                        <div
+                          key={share.id}
+                          className={`border rounded-lg p-3 ${isExpired ? 'bg-red-50 border-red-200' : 'bg-white'}`}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <span className={`px-2 py-1 rounded text-xs font-medium ${
+                              share.permissions === 'collaborate' 
+                                ? 'bg-green-100 text-green-800' 
+                                : 'bg-blue-100 text-blue-800'
+                            }`}>
+                              {share.permissions === 'collaborate' ? '✏️ Collaborate' : '👁️ Read Only'}
+                            </span>
+                            
+                            <div className="flex gap-1">
+                              {!isExpired && (
+                                <button
+                                  onClick={() => copyShareLink(share.shareUrl)}
+                                  className="text-blue-600 hover:text-blue-700 text-sm px-2 py-1"
+                                >
+                                  📋 Copy
+                                </button>
+                              )}
+                              <button
+                                onClick={() => revokeShareLink(share.share_token)}
+                                className="text-red-600 hover:text-red-700 text-sm px-2 py-1"
+                              >
+                                🗑️ Revoke
+                              </button>
+                            </div>
+                          </div>
+                          
+                          <div className="text-xs text-gray-600">
+                            <div>Created: {new Date(share.created_at).toLocaleDateString()}</div>
+                            <div className={isExpired ? 'text-red-600 font-medium' : ''}>
+                              {isExpired ? 'Expired: ' : 'Expires: '}
+                              {new Date(share.expires_at).toLocaleString()}
+                            </div>
+                          </div>
+                          
+                          {!isExpired && (
+                            <div className="mt-2 text-xs text-gray-500 break-all bg-gray-50 p-1 rounded">
+                              {share.shareUrl}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              
+              <div className="flex gap-2 mt-6">
+                <button
+                  onClick={() => setShowShareModal(false)}
+                  className="flex-1 py-2 px-4 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+                >
+                  Close
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+     
+      {/* Copy Content Selection Modal */}
+      <AnimatePresence>
+        {showCopyModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+            onClick={() => setShowCopyModal(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-lg p-6 max-w-lg w-full max-h-[80vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                <span>📊</span>
+                Select Content to Copy
+              </h3>
+              
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {copyOptions.map((option, index) => (
+                  <button
+                    key={index}
+                    onClick={() => copySelectedContent(option.content, option.label)}
+                    className="w-full text-left p-3 rounded-lg border hover:bg-gray-50 transition-colors"
+                  >
+                    <div className="font-medium text-sm">{option.label}</div>
+                    <div className="text-xs text-gray-500 mt-1 truncate">
+                      {option.content.substring(0, 100)}...
+                    </div>
+                  </button>
+                ))}
+              </div>
+              
+              <div className="flex gap-2 mt-6">
+                <button
+                  onClick={() => setShowCopyModal(false)}
+                  className="flex-1 py-2 px-4 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
                 </button>
               </div>
             </motion.div>

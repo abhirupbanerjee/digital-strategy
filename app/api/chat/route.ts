@@ -1,16 +1,114 @@
 // app/api/chat/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import axios from 'axios';
+import { createClient } from '@supabase/supabase-js';
 
-// Server-side environment variables (no NEXT_PUBLIC_ prefix)
 const ASSISTANT_ID = process.env.OPENAI_ASSISTANT_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_ORGANIZATION = process.env.OPENAI_ORGANIZATION;
 const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
 
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_KEY!
+);
+
+// Helper function to extract text from OpenAI response (consistent with threads API)
+function extractTextFromOpenAIResponse(assistantMsg: any): string {
+  try {
+    if (!assistantMsg?.content) {
+      return 'No response received.';
+    }
+
+    // Handle array of content items (most common format)
+    if (Array.isArray(assistantMsg.content)) {
+      const textParts: string[] = [];
+      
+      for (const contentItem of assistantMsg.content) {
+        if (contentItem.type === 'text') {
+          // Handle nested text structure
+          if (contentItem.text && typeof contentItem.text === 'object' && contentItem.text.value) {
+            textParts.push(contentItem.text.value);
+          } else if (typeof contentItem.text === 'string') {
+            textParts.push(contentItem.text);
+          }
+        } else if (contentItem.type === 'image_file') {
+          textParts.push('[Image file generated]');
+        } else if (contentItem.type === 'image_url') {
+          textParts.push('[Image URL generated]');
+        } else {
+          // Handle other content types (code interpreter results, etc.)
+          if (contentItem.text && typeof contentItem.text === 'string') {
+            textParts.push(contentItem.text);
+          } else if (typeof contentItem === 'string') {
+            textParts.push(contentItem);
+          }
+        }
+      }
+      
+      return textParts.length > 0 ? textParts.join('\n\n') : 'No response received.';
+    }
+    
+    // Handle direct string content
+    if (typeof assistantMsg.content === 'string') {
+      return assistantMsg.content;
+    }
+    
+    // Handle object with text property
+    if (typeof assistantMsg.content === 'object' && assistantMsg.content.text) {
+      if (typeof assistantMsg.content.text === 'string') {
+        return assistantMsg.content.text;
+      }
+      if (assistantMsg.content.text.value) {
+        return assistantMsg.content.text.value;
+      }
+    }
+    
+    // Fallback
+    console.warn('Unexpected assistant response structure:', assistantMsg.content);
+    return 'Response received but could not be processed properly.';
+    
+  } catch (error) {
+    console.error('Error extracting text from assistant response:', error);
+    return 'Error processing assistant response.';
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
-    // Log environment variables (don't log the actual keys in production)
+    const { message, threadId, webSearchEnabled, fileIds, shareToken } = await request.json();
+
+    // Validate share token if provided
+    if (shareToken) {
+      const { data: share, error: shareError } = await supabase
+        .from('project_shares')
+        .select('permissions, expires_at, project_id')
+        .eq('share_token', shareToken)
+        .single();
+
+      if (shareError || !share) {
+        return NextResponse.json(
+          { error: 'Invalid share token' },
+          { status: 403 }
+        );
+      }
+
+      if (new Date(share.expires_at) < new Date()) {
+        return NextResponse.json(
+          { error: 'Share link has expired' },
+          { status: 410 }
+        );
+      }
+
+      if (share.permissions !== 'collaborate') {
+        return NextResponse.json(
+          { error: 'This share link is read-only' },
+          { status: 403 }
+        );
+      }
+    }
+
+    // Environment check
     console.log('Environment check:', {
       hasAssistantId: !!ASSISTANT_ID,
       hasApiKey: !!OPENAI_API_KEY,
@@ -24,8 +122,6 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
-
-    const { message, threadId, webSearchEnabled, fileIds } = await request.json();
 
     if (!message || message.trim() === '') {
       return NextResponse.json(
@@ -46,7 +142,7 @@ export async function POST(request: NextRequest) {
 
     let currentThreadId = threadId;
 
-    // Create thread if it doesn't exist
+    // Create thread if needed
     if (!currentThreadId) {
       console.log('Creating new thread...');
       try {
@@ -66,7 +162,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Enhance message with web search if enabled
+    // Web search enhancement
     let enhancedMessage = message;
     let searchSources: any[] = [];
     
@@ -79,7 +175,7 @@ export async function POST(request: NextRequest) {
           {
             api_key: TAVILY_API_KEY,
             query: message,
-            search_depth: 'basic', // Use 'basic' for faster responses, 'advanced' for more thorough
+            search_depth: 'basic',
             include_answer: true,
             max_results: 5,
           },
@@ -93,15 +189,12 @@ export async function POST(request: NextRequest) {
         if (searchResponse.data) {
           const data = searchResponse.data;
           
-          // Build enhanced message with search results
           enhancedMessage = `${message}\n\n[Current Web Information - ${new Date().toLocaleString()}]:\n`;
           
-          // Add AI-generated summary if available
           if (data.answer) {
             enhancedMessage += `\nWeb Summary: ${data.answer}\n`;
           }
           
-          // Add search results
           if (data.results && data.results.length > 0) {
             enhancedMessage += '\nTop Search Results:\n';
             data.results.forEach((result: any, idx: number) => {
@@ -109,7 +202,6 @@ export async function POST(request: NextRequest) {
               enhancedMessage += `   ${result.content.substring(0, 200)}...\n`;
               enhancedMessage += `   Source: ${result.url}\n\n`;
               
-              // Store sources for later reference
               searchSources.push({
                 title: result.title,
                 url: result.url,
@@ -123,22 +215,20 @@ export async function POST(request: NextRequest) {
         }
       } catch (searchError: any) {
         console.error('Tavily search failed:', searchError.response?.data || searchError.message);
-        // Continue without search results - don't fail the entire request
         enhancedMessage = `${message}\n\n[Note: Web search was requested but encountered an error. Responding based on available knowledge.]`;
       }
     }
     
-    // Prepare message payload with file attachments if present
+    // Prepare message with attachments
     const messagePayload: any = {
       role: 'user',
       content: enhancedMessage
     };
 
-    // Add file attachments if provided
     if (fileIds && fileIds.length > 0) {
       messagePayload.attachments = fileIds.map((fileId: string) => ({
         file_id: fileId,
-        tools: [{ type: "file_search" }] // Enable file search for uploaded files
+        tools: [{ type: "file_search" }]
       }));
     }
 
@@ -159,10 +249,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Prepare run configuration
+    // Configure run
     const runConfig: any = {
       assistant_id: ASSISTANT_ID,
-      // No model specification - uses the model configured in OpenAI console
     };
 
     // Add tools configuration based on features enabled
@@ -208,7 +297,7 @@ export async function POST(request: NextRequest) {
     // Poll for completion
     let status = 'in_progress';
     let retries = 0;
-    const maxRetries = 60; // Increased for file processing
+    const maxRetries = 60;
 
     while ((status === 'in_progress' || status === 'queued') && retries < maxRetries) {
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -226,9 +315,8 @@ export async function POST(request: NextRequest) {
         if (status === 'requires_action') {
           const requiredAction = statusRes.data.required_action;
           if (requiredAction?.type === 'submit_tool_outputs') {
-            // Handle tool outputs if needed
             console.log('Tool outputs required:', requiredAction);
-            // You can implement tool output handling here if needed
+            // Tool output handling can be implemented here if needed
           }
         }
         
@@ -260,17 +348,13 @@ export async function POST(request: NextRequest) {
         
         const assistantMsg = messagesRes.data.data.find((m: any) => m.role === 'assistant');
         
-        // Process the assistant's response
+        // Process the assistant's response using our extraction function
         if (assistantMsg?.content) {
-          // Handle different content types
-          const textContent = assistantMsg.content.find((c: any) => c.type === 'text');
-          if (textContent) {
-            reply = textContent.text.value;
-            // Remove citation markers if present
-            reply = reply.replace(/【\d+:\d+†[^】]+】/g, '');
-            // Clean up any file references
-            reply = reply.replace(/\[sandbox:.*?\]/g, '');
-          }
+          reply = extractTextFromOpenAIResponse(assistantMsg);
+          
+          // Clean up any remaining citation markers or artifacts
+          reply = reply.replace(/【\d+:\d+†[^】]+】/g, '');
+          reply = reply.replace(/\[sandbox:.*?\]/g, '');
         }
         
         // Append search sources if available
