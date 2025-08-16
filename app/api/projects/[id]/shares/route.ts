@@ -1,4 +1,6 @@
-// app/api/projects/[id]/share/route.ts
+// app/api/projects/[id]/shares/route.ts
+
+
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { randomUUID } from 'crypto';

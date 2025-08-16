@@ -6,6 +6,22 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY!
 );
 
+export async function DELETE(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const params = await context.params;
+  
+  // This will cascade delete all threads due to ON DELETE CASCADE
+  const { error } = await supabase
+    .from('projects')
+    .delete()
+    .eq('id', params.id);
+
+  if (error) return NextResponse.json({ error }, { status: 500 });
+  return NextResponse.json({ success: true });
+}
+
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }

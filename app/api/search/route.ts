@@ -43,11 +43,11 @@ export async function POST(request: NextRequest) {
           {
             api_key: TAVILY_API_KEY,
             query: query,
-            search_depth: 'basic', // 'basic' or 'advanced'
+            search_depth: 'advanced', // 'basic' or 'advanced'
             include_answer: true, // Get AI-generated answer
             include_images: false,
             include_raw_content: false,
-            max_results: 3, // Limit to top 3 results
+            max_results: 5, // Limit to top 3 results
             include_domains: [], // Optional: limit to specific domains
             exclude_domains: [], // Optional: exclude specific domains
           },

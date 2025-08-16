@@ -1,13 +1,9 @@
 "use client";
-
-import React, { useState, useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { motion, AnimatePresence } from "framer-motion";
 import remarkGfm from "remark-gfm";
 import { useMemo } from "react";
-
-const randomColor = () => `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0')}`;
-const SEARCH_FLAG = '___WEB_SEARCH_IN_PROGRESS___';
 
 // Define types
 interface Message {
@@ -43,39 +39,38 @@ interface ShareLink {
   shareUrl: string;
 }
 
-// First, add this helper function at the top of your component (after the interfaces):
+// Helper function to extract text content
 const extractTextContent = (content: any): string => {
-  // If content is already a string, return it
   if (typeof content === 'string') {
-    return content;
+    // Convert <br> tags to newlines and clean up
+    return content
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/&lt;br\s*\/?&gt;/gi, '\n')
+      .replace(/\s*<br>\s*/gi, '\n')
+      .replace(/\s*&lt;br&gt;\s*/gi, '\n');
   }
   
-  // If content is an object (like OpenAI structured response)
   if (typeof content === 'object' && content !== null) {
-    // Handle OpenAI message content structure
     if (Array.isArray(content)) {
       return content
         .map(item => {
-          if (typeof item === 'string') return item;
-          if (item.type === 'text' && item.text) return item.text;
-          if (item.text && typeof item.text === 'string') return item.text;
+          if (typeof item === 'string') return item.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
+          if (item.type === 'text' && item.text) return item.text.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
+          if (item.text && typeof item.text === 'string') return item.text.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
           return '';
         })
         .filter(Boolean)
         .join('\n');
     }
     
-    // Handle single object with text property
     if (content.text && typeof content.text === 'string') {
-      return content.text;
+      return content.text.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
     }
     
-    // Handle direct text property
     if (typeof content.content === 'string') {
-      return content.content;
+      return content.content.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
     }
     
-    // Fallback: stringify the object
     try {
       return JSON.stringify(content, null, 2);
     } catch {
@@ -83,14 +78,18 @@ const extractTextContent = (content: any): string => {
     }
   }
   
-  // Fallback for any other type
   return String(content || '');
 };
+
+const randomColor = () => `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0')}`;
+const SEARCH_FLAG = '___WEB_SEARCH_IN_PROGRESS___';
 
 const ChatApp = () => {
   // Main States
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(true); // Fixed: Proper sidebar state
+  
   const [threadId, setThreadId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeRun, setActiveRun] = useState(false);
@@ -100,7 +99,7 @@ const ChatApp = () => {
   const [uploadingFile, setUploadingFile] = useState(false);
   const [fileIds, setFileIds] = useState<string[]>([]);
   const [searchInProgress, setSearchInProgress] = useState(false);
-  const [formatPreference, setFormatPreference] = useState<'default' | 'bullets' | 'table'>('default');
+  const [formatPreference, setFormatPreference] = useState<'default' | 'bullets' | 'table' | 'preserve_tables'>('default');
   
   // Project Management States
   const [projects, setProjects] = useState<Project[]>([]);
@@ -111,7 +110,7 @@ const ChatApp = () => {
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectDescription, setNewProjectDescription] = useState("");
   
-  // Share States (consolidated - removed duplicates)
+  // Share States
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareLinks, setShareLinks] = useState<ShareLink[]>([]);
   const [sharePermissions, setSharePermissions] = useState<'read' | 'collaborate'>('read');
@@ -121,13 +120,16 @@ const ChatApp = () => {
   // Mobile UI States
   const [isMobile, setIsMobile] = useState(false);
 
-  const chatContainerRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-
-  // Add these state variables to your component:
+  // Copy Modal States
   const [showCopyModal, setShowCopyModal] = useState(false);
   const [copyOptions, setCopyOptions] = useState<{ label: string; content: string; type: string }[]>([]);
+
+  // Mobile delete menu states
+  const [showProjectDeleteMenu, setShowProjectDeleteMenu] = useState<string | null>(null);
+  const [showThreadDeleteMenu, setShowThreadDeleteMenu] = useState<string | null>(null);
+
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Check for mobile device
   useEffect(() => {
@@ -144,7 +146,7 @@ const ChatApp = () => {
       .then(data => {
         const normalized = (data.projects || []).map((p: any) => ({
           ...p,
-          threads: Array.isArray(p.threads) ? p.threads.map((t: any) => t.id) : (p.threads || [])
+          threads: Array.isArray(p.threads) ? p.threads.map((t: any) => typeof t === 'string' ? t : t.id) : []
         }));
         setProjects(normalized);
 
@@ -171,28 +173,73 @@ const ChatApp = () => {
     }
   }, [currentProject, showShareModal]);
 
-
-  // Additional safety check in the initial projects loading:
-useEffect(() => {
-  fetch('/api/projects')
-    .then(res => res.json())
-    .then(data => {
-      // Ensure all projects have threads array
-      const normalized = (data.projects || []).map((p: any) => ({
-        ...p,
-        threads: Array.isArray(p.threads) ? p.threads.map((t: any) => typeof t === 'string' ? t : t.id) : []
-      }));
-      setProjects(normalized);
-
-      if (!data.projects || data.projects.length === 0) {
-        setShowProjectPanel(true);
-        setShowNewProjectModal(true);
-      }
-    })
-    .catch(err => console.error('Error loading projects:', err));
-}, []);
+  const currentProjectThreadIdSet = useMemo(
+    () => new Set(currentProject?.threads ?? []),
+    [currentProject]
+  );
 
   // Project Management Functions
+  const deleteProject = async (projectId: string) => {
+    if (!confirm('Delete this project and all its chats? This cannot be undone.')) {
+      return;
+    }
+    
+    try {
+      const res = await fetch(`/api/projects/${projectId}`, {
+        method: 'DELETE'
+      });
+      
+      if (!res.ok) throw new Error('Failed to delete project');
+      
+      setProjects(prev => prev.filter(p => p.id !== projectId));
+      
+      if (currentProject?.id === projectId) {
+        setCurrentProject(null);
+        setMessages([]);
+        setThreadId(null);
+      }
+    } catch (err) {
+      console.error('Delete project error:', err);
+      alert('Failed to delete project');
+    }
+  };
+
+  const deleteThread = async (threadId: string) => {
+    if (!confirm('Delete this chat? This cannot be undone.')) {
+      return;
+    }
+    
+    try {
+      const res = await fetch(`/api/threads/${threadId}`, {
+        method: 'DELETE'
+      });
+      
+      if (!res.ok) throw new Error('Failed to delete thread');
+      
+      setThreads(prev => prev.filter(t => t.id !== threadId));
+      
+      if (currentProject) {
+        setProjects(prev => prev.map(p => {
+          if (p.id === currentProject.id) {
+            return {
+              ...p,
+              threads: p.threads.filter(id => id !== threadId)
+            };
+          }
+          return p;
+        }));
+      }
+      
+      if (threadId === threadId) {
+        setMessages([]);
+        setThreadId(null);
+      }
+    } catch (err) {
+      console.error('Delete thread error:', err);
+      alert('Failed to delete chat');
+    }
+  };
+
   const createProject = async () => {
     if (!newProjectName.trim()) return;
     try {
@@ -219,11 +266,6 @@ useEffect(() => {
     }
   };
 
-  const currentProjectThreadIdSet = useMemo(
-    () => new Set(currentProject?.threads ?? []),
-    [currentProject]
-  );
-  
   const loadProject = async (projectId: string) => {
     const response = await fetch(`/api/projects/${projectId}`);
     if (!response.ok) throw new Error('Failed to load project');
@@ -272,94 +314,88 @@ useEffect(() => {
     }
   };
 
+  const saveThreadToProjectWithId = async (newThreadId: string) => {
+    if (!currentProject) return;
   
-    const saveThreadToProjectWithId = async (newThreadId: string) => {
-  if (!currentProject) return;
+    const thread: Thread = {
+      id: newThreadId,
+      projectId: currentProject.id,
+      title: messages[0]?.content.substring(0, 50) || "New Chat",
+      lastMessage: messages[messages.length - 1]?.content.substring(0, 100),
+      createdAt: new Date().toISOString()
+    };
   
-  const thread: Thread = {
-    id: newThreadId,
-    projectId: currentProject.id,
-    title: messages[0]?.content.substring(0, 50) || "New Chat",
-    lastMessage: messages[messages.length - 1]?.content.substring(0, 100),
-    createdAt: new Date().toISOString()
+    try {
+      const response = await fetch('/api/threads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...thread, messages })
+      });
+      
+      if (response.ok) {
+        setThreads(prev => [...prev.filter(t => t.id !== newThreadId), thread]);
+        
+        setProjects(prev => prev.map(p => {
+          if (p.id === currentProject.id) {
+            const currentThreads = Array.isArray(p.threads) ? p.threads : [];
+            if (!currentThreads.includes(newThreadId)) {
+              return { ...p, threads: [...currentThreads, newThreadId] };
+            }
+          }
+          return p;
+        }));
+        
+        console.log('Thread saved successfully:', newThreadId);
+      } else {
+        console.error('Failed to save thread:', await response.text());
+      }
+    } catch (error) {
+      console.error("Save Thread To Project error:", error);
+    }
   };
   
-  try {
-    const response = await fetch('/api/threads', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...thread, messages })
-    });
+  const saveThreadToProject = async () => {
+    if (!threadId || !currentProject) return;
+  
+    const thread: Thread = {
+      id: threadId,
+      projectId: currentProject.id,
+      title: messages[0]?.content.substring(0, 50) || "New Chat",
+      lastMessage: messages[messages.length - 1]?.content.substring(0, 100),
+      createdAt: new Date().toISOString()
+    };
     
-    if (response.ok) {
-      // Update local threads state
-      setThreads(prev => [...prev.filter(t => t.id !== newThreadId), thread]);
+    try {
+      await fetch('/api/threads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...thread, messages })
+      });
       
-      // Update projects state with null checks
+      setThreads(prev => {
+        const existing = prev.find(t => t.id === threadId);
+        if (existing) return prev;
+        return [...prev, thread];
+      });
+      
       setProjects(prev => prev.map(p => {
         if (p.id === currentProject.id) {
-          // Ensure threads array exists and check if thread is already included
           const currentThreads = Array.isArray(p.threads) ? p.threads : [];
-          if (!currentThreads.includes(newThreadId)) {
-            return { ...p, threads: [...currentThreads, newThreadId] };
+          if (!currentThreads.includes(threadId)) {
+            return { ...p, threads: [...currentThreads, threadId] };
           }
         }
         return p;
       }));
-      
-      console.log('Thread saved successfully:', newThreadId);
-    } else {
-      console.error('Failed to save thread:', await response.text());
+    } catch (error) {
+      console.error("Save Thread To Project error:", error);
     }
-  } catch (error) {
-    console.error("Save Thread To Project error:", error);
-  }
-};
-  
-  const saveThreadToProject = async () => {
-  if (!threadId || !currentProject) return;
-  
-  const thread: Thread = {
-    id: threadId,
-    projectId: currentProject.id,
-    title: messages[0]?.content.substring(0, 50) || "New Chat",
-    lastMessage: messages[messages.length - 1]?.content.substring(0, 100),
-    createdAt: new Date().toISOString()
   };
-  
-  try {
-    await fetch('/api/threads', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...thread, messages })
-    });
-    
-    setThreads(prev => {
-      const existing = prev.find(t => t.id === threadId);
-      if (existing) return prev;
-      return [...prev, thread];
-    });
-    
-    setProjects(prev => prev.map(p => {
-      if (p.id === currentProject.id) {
-        // Ensure threads array exists
-        const currentThreads = Array.isArray(p.threads) ? p.threads : [];
-        if (!currentThreads.includes(threadId)) {
-          return { ...p, threads: [...currentThreads, threadId] };
-        }
-      }
-      return p;
-    }));
-  } catch (error) {
-    console.error("Save Thread To Project error:", error);
-  }
-};
 
-
-  // Share Functions (fixed API paths)
+  // Share Functions
   const loadProjectShares = async (projectId: string) => {
     try {
-      const response = await fetch(`/api/projects/${projectId}/shares`); // Fixed: /shares
+      const response = await fetch(`/api/projects/${projectId}/shares`);
       if (response.ok) {
         const data = await response.json();
         setShareLinks(data.shares || []);
@@ -374,7 +410,7 @@ useEffect(() => {
     
     setCreatingShare(true);
     try {
-      const response = await fetch(`/api/projects/${currentProject.id}/shares`, { // Fixed: /shares
+      const response = await fetch(`/api/projects/${currentProject.id}/shares`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -404,7 +440,7 @@ useEffect(() => {
     if (!currentProject || !confirm('Revoke this share link?')) return;
     
     try {
-      const response = await fetch(`/api/projects/${currentProject.id}/shares?token=${shareToken}`, { // Fixed: /shares
+      const response = await fetch(`/api/projects/${currentProject.id}/shares?token=${shareToken}`, {
         method: 'DELETE'
       });
 
@@ -426,174 +462,152 @@ useEffect(() => {
     }
   };
 
-  // 1. Function to copy the last bot response
-const copyLastBotResponse = async () => {
-  try {
-    // Find the last assistant message
-    const lastBotMessage = messages
-      .slice()
-      .reverse()
-      .find(msg => msg.role === "assistant");
-    
-    if (!lastBotMessage) {
-      alert("No bot response found to copy.");
-      return;
-    }
-    
-    const content = extractTextContent(lastBotMessage.content);
-    await navigator.clipboard.writeText(content);
-    alert("Last bot response copied to clipboard!");
-  } catch (error) {
-    console.error("Failed to copy last response:", error);
-    alert("Failed to copy response to clipboard.");
-  }
-};
-
-// 2. Function to extract and copy tables from content
-const extractTables = (content: string): string[] => {
-  const tables: string[] = [];
-  
-  // Extract markdown tables (format: | col1 | col2 |)
-  const tableRegex = /\|[^|\n]*\|[^|\n]*\|[\s\S]*?(?=\n\n|\n$|$)/g;
-  const markdownTables = content.match(tableRegex);
-  
-  if (markdownTables) {
-    tables.push(...markdownTables.map(table => table.trim()));
-  }
-  
-  return tables;
-};
-
-// 3. Function to extract and copy diagrams/code blocks
-const extractCodeBlocks = (content: string): string[] => {
-  const codeBlocks: string[] = [];
-  
-  // Extract code blocks (```language ... ```)
-  const codeRegex = /```[\s\S]*?```/g;
-  const matches = content.match(codeRegex);
-  
-  if (matches) {
-    codeBlocks.push(...matches.map(block => block.trim()));
-  }
-  
-  return codeBlocks;
-};
-
-// 4. Function to extract lists
-const extractLists = (content: string): string[] => {
-  const lists: string[] = [];
-  
-  // Extract numbered lists
-  const numberedListRegex = /(?:^|\n)((?:\d+\.\s+[^\n]+(?:\n(?:\s{2,}[^\n]+|\d+\.\s+[^\n]+))*)+)/gm;
-  const numberedMatches = content.match(numberedListRegex);
-  
-  if (numberedMatches) {
-    lists.push(...numberedMatches.map(list => list.trim()));
-  }
-  
-  // Extract bullet lists
-  const bulletListRegex = /(?:^|\n)((?:[*-]\s+[^\n]+(?:\n(?:\s{2,}[^\n]+|[*-]\s+[^\n]+))*)+)/gm;
-  const bulletMatches = content.match(bulletListRegex);
-  
-  if (bulletMatches) {
-    lists.push(...bulletMatches.map(list => list.trim()));
-  }
-  
-  return lists;
-};
-
-// 5. Main function to copy embedded content with selection
-const copyEmbeddedContent = async () => {
-  try {
-    // Find the last assistant message
-    const lastBotMessage = messages
-      .slice()
-      .reverse()
-      .find(msg => msg.role === "assistant");
-    
-    if (!lastBotMessage) {
-      alert("No bot response found.");
-      return;
-    }
-    
-    const content = extractTextContent(lastBotMessage.content);
-    
-    // Extract different types of content
-    const tables = extractTables(content);
-    const codeBlocks = extractCodeBlocks(content);
-    const lists = extractLists(content);
-    
-    // Create options for user to choose from
-    const options: { label: string; content: string; type: string }[] = [];
-    
-    // Add full response option
-    options.push({
-      label: "📄 Full Response",
-      content: content,
-      type: "full"
-    });
-    
-    // Add tables
-    tables.forEach((table, index) => {
-      const preview = table.split('\n')[0].substring(0, 50) + '...';
-      options.push({
-        label: `📊 Table ${index + 1}: ${preview}`,
-        content: table,
-        type: "table"
-      });
-    });
-    
-    // Add code blocks
-    codeBlocks.forEach((code, index) => {
-      const firstLine = code.split('\n')[0].replace(/```\w*/, '').substring(0, 30);
-      options.push({
-        label: `💻 Code Block ${index + 1}: ${firstLine}...`,
-        content: code,
-        type: "code"
-      });
-    });
-    
-    // Add lists
-    lists.forEach((list, index) => {
-      const firstItem = list.split('\n')[0].substring(0, 40) + '...';
-      options.push({
-        label: `📋 List ${index + 1}: ${firstItem}`,
-        content: list,
-        type: "list"
-      });
-    });
-    
-    if (options.length === 1) {
-      // Only full response available
+  // Copy Functions
+  const copyLastBotResponse = async () => {
+    try {
+      const lastBotMessage = messages
+        .slice()
+        .reverse()
+        .find(msg => msg.role === "assistant");
+      
+      if (!lastBotMessage) {
+        alert("No bot response found to copy.");
+        return;
+      }
+      
+      const content = extractTextContent(lastBotMessage.content);
       await navigator.clipboard.writeText(content);
-      alert("Full response copied to clipboard!");
-      return;
+      alert("Last bot response copied to clipboard!");
+    } catch (error) {
+      console.error("Failed to copy last response:", error);
+      alert("Failed to copy response to clipboard.");
+    }
+  };
+
+  const extractTables = (content: string): string[] => {
+    const tables: string[] = [];
+    const tableRegex = /\|[^|\n]*\|[^|\n]*\|[\s\S]*?(?=\n\n|\n$|$)/g;
+    const markdownTables = content.match(tableRegex);
+    
+    if (markdownTables) {
+      tables.push(...markdownTables.map(table => table.trim()));
     }
     
-    // Show selection modal
-    setShowCopyModal(true);
-    setCopyOptions(options);
+    return tables;
+  };
+
+  const extractCodeBlocks = (content: string): string[] => {
+    const codeBlocks: string[] = [];
+    const codeRegex = /```[\s\S]*?```/g;
+    const matches = content.match(codeRegex);
     
-  } catch (error) {
-    console.error("Failed to extract content:", error);
-    alert("Failed to extract content.");
-  }
-};
+    if (matches) {
+      codeBlocks.push(...matches.map(block => block.trim()));
+    }
+    
+    return codeBlocks;
+  };
 
-// 6. Function to copy selected content
-const copySelectedContent = async (content: string, label: string) => {
-  try {
-    await navigator.clipboard.writeText(content);
-    alert(`${label} copied to clipboard!`);
-    setShowCopyModal(false);
-  } catch (error) {
-    console.error("Failed to copy content:", error);
-    alert("Failed to copy content to clipboard.");
-  }
-};
+  const extractLists = (content: string): string[] => {
+    const lists: string[] = [];
+    
+    const numberedListRegex = /(?:^|\n)((?:\d+\.\s+[^\n]+(?:\n(?:\s{2,}[^\n]+|\d+\.\s+[^\n]+))*)+)/gm;
+    const numberedMatches = content.match(numberedListRegex);
+    
+    if (numberedMatches) {
+      lists.push(...numberedMatches.map(list => list.trim()));
+    }
+    
+    const bulletListRegex = /(?:^|\n)((?:[*-]\s+[^\n]+(?:\n(?:\s{2,}[^\n]+|[*-]\s+[^\n]+))*)+)/gm;
+    const bulletMatches = content.match(bulletListRegex);
+    
+    if (bulletMatches) {
+      lists.push(...bulletMatches.map(list => list.trim()));
+    }
+    
+    return lists;
+  };
 
+  const copyEmbeddedContent = async () => {
+    try {
+      const lastBotMessage = messages
+        .slice()
+        .reverse()
+        .find(msg => msg.role === "assistant");
+      
+      if (!lastBotMessage) {
+        alert("No bot response found.");
+        return;
+      }
+      
+      const content = extractTextContent(lastBotMessage.content);
+      
+      const tables = extractTables(content);
+      const codeBlocks = extractCodeBlocks(content);
+      const lists = extractLists(content);
+      
+      const options: { label: string; content: string; type: string }[] = [];
+      
+      options.push({
+        label: "📄 Full Response",
+        content: content,
+        type: "full"
+      });
+      
+      tables.forEach((table, index) => {
+        const preview = table.split('\n')[0].substring(0, 50) + '...';
+        options.push({
+          label: `📊 Table ${index + 1}: ${preview}`,
+          content: table,
+          type: "table"
+        });
+      });
+      
+      codeBlocks.forEach((code, index) => {
+        const firstLine = code.split('\n')[0].replace(/```\w*/, '').substring(0, 30);
+        options.push({
+          label: `💻 Code Block ${index + 1}: ${firstLine}...`,
+          content: code,
+          type: "code"
+        });
+      });
+      
+      lists.forEach((list, index) => {
+        const firstItem = list.split('\n')[0].substring(0, 40) + '...';
+        options.push({
+          label: `📋 List ${index + 1}: ${firstItem}`,
+          content: list,
+          type: "list"
+        });
+      });
+      
+      if (options.length === 1) {
+        await navigator.clipboard.writeText(content);
+        alert("Full response copied to clipboard!");
+        return;
+      }
+      
+      setShowCopyModal(true);
+      setCopyOptions(options);
+      
+    } catch (error) {
+      console.error("Failed to extract content:", error);
+      alert("Failed to extract content.");
+    }
+  };
 
-  // File handling functions (unchanged)
+  const copySelectedContent = async (content: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      alert(`${label} copied to clipboard!`);
+      setShowCopyModal(false);
+    } catch (error) {
+      console.error("Failed to copy content:", error);
+      alert("Failed to copy content to clipboard.");
+    }
+  };
+
+  // File handling functions
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
@@ -666,7 +680,7 @@ const copySelectedContent = async (content: string, label: string) => {
     setFileIds(prev => prev.filter((_, i) => i !== index));
   };
 
-  // Send message function (unchanged)
+  // Send message function
   const sendMessage = async () => {
     if (activeRun || !input.trim()) return;
     setActiveRun(true);
@@ -678,7 +692,8 @@ const copySelectedContent = async (content: string, label: string) => {
     if (formatPreference !== 'default') {
       const formatInstructions = {
         bullets: '\n\n[Format: Please structure your response using bullet points where appropriate]',
-        table: '\n\n[Format: Please use tables to organize data when applicable]'
+        table: '\n\n[Format: Please use tables to organize data when applicable]',
+        preserve_tables: '\n\n[IMPORTANT: If the previous response contained a table, please maintain the EXACT same table structure and format. Add new information as additional rows or columns, but keep it in proper markdown table format with | separators |]'
       };
     
       enhancedInput = input + formatInstructions[formatPreference];
@@ -731,7 +746,6 @@ const copySelectedContent = async (content: string, label: string) => {
       if (data.threadId && data.threadId !== threadId) {
         setThreadId(data.threadId);
         if (currentProject) {
-          // Save immediately with the NEW threadId from API response
           saveThreadToProjectWithId(data.threadId);
         }
       }
@@ -808,7 +822,7 @@ const copySelectedContent = async (content: string, label: string) => {
   };
 
   return (
-    <div className="h-screen w-full flex flex-col bg-white md:flex-row">
+    <div className="h-[100svh] md:h-screen w-full flex flex-col bg-neutral-50 md:flex-row overflow-hidden">
       {/* Desktop Sidebar / Mobile Menu */}
       <AnimatePresence>
         {(showProjectPanel || !isMobile) && (
@@ -818,12 +832,12 @@ const copySelectedContent = async (content: string, label: string) => {
             exit={{ x: -300 }}
             className={`${
               isMobile 
-                ? 'fixed inset-y-0 left-0 z-50 w-80' 
-                : 'relative w-80 border-r'
-            } bg-gray-50 flex flex-col`}
+                ? 'fixed inset-y-0 left-0 z-50 w-80 bg-gray-50' 
+                : `relative bg-white/80 backdrop-blur flex flex-col ring-1 ring-gray-200 shadow-sm transition-[width] duration-300 ease-in-out ${sidebarOpen ? "w-80" : "w-0 overflow-hidden"}`
+            } flex flex-col`}
           >
             {/* Project Header */}
-            <div className="p-4 border-b bg-white">
+            <div className="sticky top-0 z-30 p-4 bg-white/80 backdrop-blur border-b border-gray-200">
               <div className="flex items-center justify-between">
                 <h3 className="font-semibold text-lg">Projects</h3>
                 <div className="flex gap-2">
@@ -872,28 +886,78 @@ const copySelectedContent = async (content: string, label: string) => {
             <div className="flex-1 overflow-y-auto p-4">
               <div className="space-y-2">
                 {projects.map((project) => (
-                  <button
-                    key={project.id}
-                    onClick={() => selectProject(project)}
-                    className={`w-full text-left p-3 rounded-lg transition-colors ${
-                      currentProject?.id === project.id
-                        ? 'bg-blue-100 border-blue-300'
-                        : 'bg-white hover:bg-gray-100'
-                    } border`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <div 
-                        className="w-3 h-3 rounded-full flex-shrink-0" 
-                        style={{ backgroundColor: project.color }}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium text-sm">{project.name}</div>
-                        <div className="text-xs text-gray-500">
-                          {Array.isArray(project.threads) ? project.threads.length : 0} chat(s)
+                  <div key={project.id} className="relative group">
+                    <button
+                      onClick={() => selectProject(project)}
+                      className={`w-full text-left p-3 rounded-lg transition-colors ${
+                        currentProject?.id === project.id
+                          ? 'bg-blue-100 border-blue-300'
+                          : 'bg-white hover:bg-gray-100'
+                      } border`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <div 
+                          className="w-3 h-3 rounded-full flex-shrink-0" 
+                          style={{ backgroundColor: project.color }}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-sm">{project.name}</div>
+                          <div className="text-xs text-gray-500">
+                            {Array.isArray(project.threads) ? project.threads.length : 0} chat(s)
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </button>
+                    </button>
+                    
+                    {/* Desktop delete button */}
+                    {!isMobile && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteProject(project.id);
+                        }}
+                        className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-100 rounded"
+                        title="Delete project"
+                      >
+                        <svg className="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    )}
+                    
+                    {/* Mobile three-dot menu */}
+                    {isMobile && (
+                      <div className="absolute top-2 right-2">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowProjectDeleteMenu(showProjectDeleteMenu === project.id ? null : project.id);
+                          }}
+                          className="p-1 hover:bg-gray-100 rounded"
+                        >
+                          <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                          </svg>
+                        </button>
+                        
+                        {/* Mobile delete dropdown */}
+                        {showProjectDeleteMenu === project.id && (
+                          <div className="absolute right-0 top-8 bg-white rounded-xl ring-1 ring-gray-100 shadow-lg py-1 z-20 min-w-[120px]">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteProject(project.id);
+                                setShowProjectDeleteMenu(null);
+                              }}
+                              className="block w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50"
+                            >
+                              🗒️ Delete Project
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 ))}
               </div>
 
@@ -906,20 +970,69 @@ const copySelectedContent = async (content: string, label: string) => {
                       .filter(t => currentProject.threads.includes(t.id))
                       .slice(0, 5)
                       .map((thread) => (
-                        <button
-                          key={thread.id}
-                          onClick={() => loadThread(thread.id)}
-                          className={`w-full text-left p-2 rounded text-sm ${
-                            threadId === thread.id
-                              ? 'bg-blue-50 text-blue-700'
-                              : 'hover:bg-gray-100'
-                          }`}
-                        >
-                          <div className="truncate">{thread.title}</div>
-                          <div className="text-xs text-gray-500 truncate">
-                            {thread.lastMessage}
-                          </div>
-                        </button>
+                        <div key={thread.id} className="relative group">
+                          <button
+                            onClick={() => loadThread(thread.id)}
+                            className={`w-full text-left p-2 rounded text-sm ${
+                              threadId === thread.id
+                                ? 'bg-blue-50 text-blue-700'
+                                : 'hover:bg-gray-100'
+                            }`}
+                          >
+                            <div className="truncate">{thread.title}</div>
+                            <div className="text-xs text-gray-500 truncate">
+                              {thread.lastMessage}
+                            </div>
+                          </button>
+                          
+                          {/* Desktop delete button */}
+                          {!isMobile && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteThread(thread.id);
+                              }}
+                              className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-100 rounded"
+                              title="Delete chat"
+                            >
+                              <svg className="w-3 h-3 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          )}
+                          
+                          {/* Mobile three-dot menu */}
+                          {isMobile && (
+                            <div className="absolute top-2 right-2">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setShowThreadDeleteMenu(showThreadDeleteMenu === thread.id ? null : thread.id);
+                                }}
+                                className="p-1 hover:bg-gray-100 rounded"
+                              >
+                                <svg className="w-3 h-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                                </svg>
+                              </button>
+                              
+                              {showThreadDeleteMenu === thread.id && (
+                                <div className="absolute right-0 top-6 bg-white rounded-xl ring-1 ring-gray-100 shadow-lg py-1 z-20 min-w-[100px]">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      deleteThread(thread.id);
+                                      setShowThreadDeleteMenu(null);
+                                    }}
+                                    className="block w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50"
+                                  >
+                                    🗒️ Delete Chat
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       ))}
                   </div>
                   <button
@@ -936,10 +1049,26 @@ const copySelectedContent = async (content: string, label: string) => {
       </AnimatePresence>
 
       {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col">
-        {/* Header */}
-        <header className="flex items-center justify-between w-full p-3 md:p-4 bg-white shadow-md">
-          <div className="flex items-center gap-2">
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Header - Fixed according to OpenAI suggestions */}
+        <header className="sticky top-0 z-40 w-full p-3 md:p-4 bg-white/80 backdrop-blur border-b border-gray-200">
+          <div className="relative flex items-center justify-between">
+            {/* Left: Desktop toggle button */}
+            {!isMobile && (
+              <button
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+                className="flex items-center gap-2 p-2 rounded-lg hover:bg-gray-100"
+                aria-pressed={sidebarOpen}
+                title={sidebarOpen ? "Hide panel" : "Show panel"}
+              >
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h10" />
+                </svg>
+                <span className="text-sm text-gray-700">{sidebarOpen ? "Hide panel" : "Show panel"}</span>
+              </button>
+            )}
+            
+            {/* Mobile hamburger button */}
             {isMobile && (
               <button
                 onClick={() => setShowProjectPanel(!showProjectPanel)}
@@ -950,25 +1079,35 @@ const copySelectedContent = async (content: string, label: string) => {
                 </svg>
               </button>
             )}
-            <img src="/icon.png" alt="Icon" className="h-8 w-8 md:h-12 md:w-12" />
-            <h2 className="text-lg md:text-xl font-bold">Digital Strategy Bot</h2>
-          </div>
-          {!isMobile && currentProject && (
-            <div className="flex items-center gap-2">
-              <div 
-                className="w-3 h-3 rounded-full" 
-                style={{ backgroundColor: currentProject.color }}
-              />
-              <span className="text-sm">{currentProject.name}</span>
+
+            {/* Center: Title block - Fixed positioning */}
+            <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2">
+              <img src="/icon.png" alt="Icon" className="h-8 w-8 md:h-10 md:w-10" />
+              <h2 className="text-lg md:text-xl font-semibold tracking-tight text-gray-900">
+                Digital Strategy Bot
+              </h2>
             </div>
-          )}
+            
+            {/* Right: Optional status */}
+            <div className="flex items-center gap-2">
+              {!isMobile && currentProject && (
+                <>
+                  <div 
+                    className="w-3 h-3 rounded-full" 
+                    style={{ backgroundColor: currentProject.color }}
+                  />
+                  <span className="text-sm">{currentProject.name}</span>
+                </>
+              )}
+            </div>
+          </div>
         </header>
 
-        {/* Chat Container - keeping the existing markdown rendering */}
-        <div className="flex-grow flex flex-col p-2 md:p-4">
+        {/* Chat Container */}
+        <div className="flex-1 flex flex-col p-2 md:p-4 overflow-hidden">
           <div
             ref={chatContainerRef}
-            className="flex-grow overflow-y-auto border p-3 space-y-4 bg-white shadow rounded-lg"
+            className="flex-1 overflow-y-auto ring-1 ring-gray-200 shadow-sm rounded-2xl bg-white p-4 md:p-5 space-y-4 pb-28"
           >
             {messages.map((msg, index) => (
               <motion.div key={index}>
@@ -988,94 +1127,93 @@ const copySelectedContent = async (content: string, label: string) => {
                   }`}
                 >
                 <ReactMarkdown
-  remarkPlugins={[remarkGfm]}
-  components={{
-    // Headers with OpenAI-style formatting
-    h1: ({ children, ...props }) => (
-      <h1 className="text-xl md:text-2xl font-bold mt-4 md:mt-6 mb-3 md:mb-4 text-gray-900" {...props}>{children}</h1>
-    ),
-    h2: ({ children, ...props }) => (
-      <h2 className="text-lg md:text-xl font-semibold mt-3 md:mt-5 mb-2 md:mb-3 text-gray-800" {...props}>{children}</h2>
-    ),
-    h3: ({ children, ...props }) => (
-      <h3 className="text-base md:text-lg font-semibold mt-3 md:mt-4 mb-2 text-gray-800" {...props}>{children}</h3>
-    ),
-    p: ({ children, ...props }) => (
-      <p className="mb-3 md:mb-4 leading-relaxed text-sm md:text-base text-gray-700" {...props}>{children}</p>
-    ),
-    a: ({ href, children, ...props }) => {
-      const isCitation = href?.startsWith('http');
-      return (
-        <a 
-          href={href} 
-          target="_blank" 
-          rel="noopener noreferrer"
-          className={isCitation 
-            ? "text-blue-600 hover:text-blue-800 underline decoration-1 hover:decoration-2 transition-colors"
-            : "text-blue-600 hover:text-blue-800 underline"
-          }
-          {...props}
-        >
-          {children}
-          {isCitation && <span className="text-xs ml-1">↗</span>}
-        </a>
-      );
-    },
-    code: ({ inline, className, children, ...props }: any) => {
-      return !inline ? (
-        <pre className="bg-gray-900 text-gray-100 rounded-lg p-3 md:p-4 overflow-x-auto mb-3 md:mb-4 text-xs md:text-sm">
-          <code className={className} {...props}>
-            {children}
-          </code>
-        </pre>
-      ) : (
-        <code className="bg-gray-100 text-red-600 px-1 py-0.5 rounded text-xs md:text-sm font-mono" {...props}>
-          {children}
-        </code>
-      );
-    },
-    ul: ({ children, ...props }) => (
-      <ul className="list-disc pl-5 md:pl-6 mb-3 md:mb-4 space-y-1 md:space-y-2 text-sm md:text-base" {...props}>{children}</ul>
-    ),
-    ol: ({ children, ...props }) => (
-      <ol className="list-decimal pl-5 md:pl-6 mb-3 md:mb-4 space-y-1 md:space-y-2 text-sm md:text-base" {...props}>{children}</ol>
-    ),
-    li: ({ children, ...props }) => (
-      <li className="text-gray-700 leading-relaxed text-sm md:text-base" {...props}>{children}</li>
-    ),
-    table: ({ children, ...props }) => (
-      <div className="overflow-x-auto mb-3 md:mb-4">
-        <table className="min-w-full border-collapse border border-gray-300 text-sm md:text-base" {...props}>
-          {children}
-        </table>
-      </div>
-    ),
-    th: ({ children, ...props }) => (
-      <th className="border border-gray-300 px-2 md:px-4 py-1 md:py-2 text-left font-semibold text-gray-900 bg-gray-100 text-sm md:text-base" {...props}>
-        {children}
-      </th>
-    ),
-    td: ({ children, ...props }) => (
-      <td className="border border-gray-300 px-2 md:px-4 py-1 md:py-2 text-gray-700 text-sm md:text-base" {...props}>
-        {children}
-      </td>
-    ),
-    blockquote: ({ children, ...props }) => (
-      <blockquote className="border-l-4 border-gray-300 pl-3 md:pl-4 py-2 mb-3 md:mb-4 italic text-gray-600 text-sm md:text-base" {...props}>
-        {children}
-      </blockquote>
-    ),
-    strong: ({ children, ...props }) => (
-      <strong className="font-semibold text-gray-900" {...props}>{children}</strong>
-    ),
-  }}
->
-  {extractTextContent(msg.content)}
-
-</ReactMarkdown>  
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    h1: ({ children, ...props }) => (
+                      <h1 className="text-xl md:text-2xl font-bold mt-4 md:mt-6 mb-3 md:mb-4 text-gray-900" {...props}>{children}</h1>
+                    ),
+                    h2: ({ children, ...props }) => (
+                      <h2 className="text-lg md:text-xl font-semibold mt-3 md:mt-5 mb-2 md:mb-3 text-gray-800" {...props}>{children}</h2>
+                    ),
+                    h3: ({ children, ...props }) => (
+                      <h3 className="text-base md:text-lg font-semibold mt-3 md:mt-4 mb-2 text-gray-800" {...props}>{children}</h3>
+                    ),
+                    p: ({ children, ...props }) => (
+                      <p className="mb-3 md:mb-4 leading-relaxed text-sm md:text-base text-gray-700" {...props}>{children}</p>
+                    ),
+                    a: ({ href, children, ...props }) => {
+                      const isCitation = href?.startsWith('http');
+                      return (
+                        <a 
+                          href={href} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className={isCitation 
+                            ? "text-blue-600 hover:text-blue-800 underline decoration-1 hover:decoration-2 transition-colors"
+                            : "text-blue-600 hover:text-blue-800 underline"
+                          }
+                          {...props}
+                        >
+                          {children}
+                          {isCitation && <span className="text-xs ml-1">↗</span>}
+                        </a>
+                      );
+                    },
+                    code: ({ inline, className, children, ...props }: any) => {
+                      return !inline ? (
+                        <pre className="bg-gray-900 text-gray-100 rounded-lg p-3 md:p-4 overflow-x-auto mb-3 md:mb-4 text-xs md:text-sm">
+                          <code className={className} {...props}>
+                            {children}
+                          </code>
+                        </pre>
+                      ) : (
+                        <code className="bg-gray-100 text-red-600 px-1 py-0.5 rounded text-xs md:text-sm font-mono" {...props}>
+                          {children}
+                        </code>
+                      );
+                    },
+                    ul: ({ children, ...props }) => (
+                      <ul className="list-disc pl-5 md:pl-6 mb-3 md:mb-4 space-y-1 md:space-y-2 text-sm md:text-base" {...props}>{children}</ul>
+                    ),
+                    ol: ({ children, ...props }) => (
+                      <ol className="list-decimal pl-5 md:pl-6 mb-3 md:mb-4 space-y-1 md:space-y-2 text-sm md:text-base" {...props}>{children}</ol>
+                    ),
+                    li: ({ children, ...props }) => (
+                      <li className="text-gray-700 leading-relaxed text-sm md:text-base" {...props}>{children}</li>
+                    ),
+                    table: ({ children, ...props }) => (
+                      <div className="overflow-x-auto mb-3 md:mb-4">
+                        <table className="min-w-full border-collapse border border-gray-300 text-sm md:text-base table-auto" {...props}>
+                          {children}
+                        </table>
+                      </div>
+                    ),
+                    th: ({ children, ...props }) => (
+                      <th className="border border-gray-300 px-2 md:px-4 py-2 md:py-3 text-left font-semibold text-gray-900 bg-gray-100 text-sm md:text-base align-top" {...props}>
+                        {children}
+                      </th>
+                    ),
+                    td: ({ children, ...props }) => (
+                      <td className="border border-gray-300 px-2 md:px-4 py-2 md:py-3 text-gray-700 text-sm md:text-base whitespace-pre-line align-top" {...props}>
+                        {children}
+                      </td>
+                    ),
+                    blockquote: ({ children, ...props }) => (
+                      <blockquote className="border-l-4 border-gray-300 pl-3 md:pl-4 py-2 mb-3 md:mb-4 italic text-gray-600 text-sm md:text-base" {...props}>
+                        {children}
+                      </blockquote>
+                    ),
+                    strong: ({ children, ...props }) => (
+                      <strong className="font-semibold text-gray-900" {...props}>{children}</strong>
+                    ),
+                  }}
+                >
+                  {extractTextContent(msg.content)}
+                </ReactMarkdown>  
                 </div>
               </motion.div>
             ))}
+
             {/* Typing Indicator */}
             {typing && (
               <div className="flex items-center gap-2 text-gray-500 italic p-2">
@@ -1123,12 +1261,13 @@ const copySelectedContent = async (content: string, label: string) => {
                     <span className="text-sm text-gray-600">Format:</span>
                     <select
                       value={formatPreference}
-                      onChange={(e) => setFormatPreference(e.target.value as 'default' | 'bullets' | 'table')}
+                      onChange={(e) => setFormatPreference(e.target.value as 'default' | 'bullets' | 'table' | 'preserve_tables')}
                       className="text-sm border rounded px-2 py-1"
                     >
                       <option value="default">Default</option>
                       <option value="bullets">• Bullets</option>
                       <option value="table">⊞ Tables</option>
+                      <option value="preserve_tables">📋 Keep Table Format</option>
                     </select>
                   </div>
 
@@ -1149,7 +1288,7 @@ const copySelectedContent = async (content: string, label: string) => {
                     >
                       {uploadingFile ? (
                         <>
-                          <span className="animate-spin">⏳</span>
+                          <span className="animate-spin">⟳</span>
                           Uploading...
                         </>
                       ) : (
@@ -1222,12 +1361,13 @@ const copySelectedContent = async (content: string, label: string) => {
                 
                 <select
                   value={formatPreference}
-                  onChange={(e) => setFormatPreference(e.target.value as 'default' | 'bullets' | 'table')}
+                  onChange={(e) => setFormatPreference(e.target.value as 'default' | 'bullets' | 'table' | 'preserve_tables')}
                   className="flex-1 py-2 px-3 rounded-lg text-sm border bg-white"
                 >
                   <option value="default">Format: Default</option>
                   <option value="bullets">Format: Bullets</option>
                   <option value="table">Format: Tables</option>
+                  <option value="preserve_tables">Format: Keep Tables</option>
                 </select>
                 
                 <button
@@ -1263,12 +1403,12 @@ const copySelectedContent = async (content: string, label: string) => {
         </div>
 
         {/* Input & Controls */}
-        <div className="p-3 md:p-4 bg-white border-t">
+        <div className="p-3 md:p-4 bg-white/90 backdrop-blur border-t border-gray-200 z-40">
           <div className="flex flex-col gap-2">
             {/* Input Row */}
             <div className="flex items-center gap-2">
               <input
-                className="flex-1 border rounded-lg px-3 py-2 text-sm md:text-base focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="flex-1 rounded-xl ring-1 ring-gray-100 px-3 py-2 text-sm md:text-base focus:outline-none focus:ring-2 focus:ring-blue-500"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendMessage()}
@@ -1286,7 +1426,7 @@ const copySelectedContent = async (content: string, label: string) => {
                 {loading ? (
                   <span className="animate-pulse">...</span>
                 ) : (
-                  <span>{isMobile ? '→' : 'Send'}</span>
+                  <span>{isMobile ? '↑' : 'Send'}</span>
                 )}
               </button>
             </div>
@@ -1317,7 +1457,7 @@ const copySelectedContent = async (content: string, label: string) => {
                     className="flex-1 py-2 px-3 bg-red-400 hover:bg-red-500 text-white rounded-lg text-sm font-medium transition-colors"
                     onClick={clearChat}
                     >
-                   🗑️ Clear Chat
+                   🗒️ Clear Chat
                   </button>
                    </>
               )}
@@ -1326,27 +1466,9 @@ const copySelectedContent = async (content: string, label: string) => {
                 <div className="flex gap-2 w-full">
                   <button
                     className="flex-1 py-2 px-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-sm"
-                    onClick={copyLastBotResponse}
-                  >
-                    📋 Last
-                  </button>
-                  <button
-                    className="flex-1 py-2 px-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-sm"
-                    onClick={copyEmbeddedContent}
-                  >
-                    📊 Content
-                  </button>
-                  <button
-                    className="flex-1 py-2 px-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-sm"
-                    onClick={copyChatToClipboard}
-                  >
-                    💬 All
-                  </button>
-                  <button
-                    className="flex-1 py-2 px-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-sm"
                     onClick={clearChat}
                   >
-                    🗑️ Clear
+                    🗒️ Clear
                   </button>
                   {currentProject && (
                     <button
@@ -1391,7 +1513,7 @@ const copySelectedContent = async (content: string, label: string) => {
                     type="text"
                     value={newProjectName}
                     onChange={(e) => setNewProjectName(e.target.value)}
-                    className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full rounded-xl ring-1 ring-gray-100 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     placeholder="e.g., Research Project"
                   />
                 </div>
@@ -1403,7 +1525,7 @@ const copySelectedContent = async (content: string, label: string) => {
                   <textarea
                     value={newProjectDescription}
                     onChange={(e) => setNewProjectDescription(e.target.value)}
-                    className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full rounded-xl ring-1 ring-gray-100 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     rows={3}
                     placeholder="Brief description of the project..."
                   />
@@ -1430,7 +1552,7 @@ const copySelectedContent = async (content: string, label: string) => {
         )}
       </AnimatePresence>
       
-      {/* Share Modal - Inline Implementation */}
+      {/* Share Modal */}
       <AnimatePresence>
         {showShareModal && currentProject && (
           <motion.div
@@ -1464,7 +1586,7 @@ const copySelectedContent = async (content: string, label: string) => {
                     <select
                       value={sharePermissions}
                       onChange={(e) => setSharePermissions(e.target.value as 'read' | 'collaborate')}
-                      className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full rounded-xl ring-1 ring-gray-100 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="read">👁️ Read Only - Can view conversations</option>
                       <option value="collaborate">✏️ Collaborate - Can chat and contribute</option>
@@ -1478,7 +1600,7 @@ const copySelectedContent = async (content: string, label: string) => {
                     <select
                       value={shareExpiryDays}
                       onChange={(e) => setShareExpiryDays(Number(e.target.value))}
-                      className="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full rounded-xl ring-1 ring-gray-100 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value={1}>1 Day (Default)</option>
                       <option value={3}>3 Days</option>
@@ -1513,7 +1635,7 @@ const copySelectedContent = async (content: string, label: string) => {
                       return (
                         <div
                           key={share.id}
-                          className={`border rounded-lg p-3 ${isExpired ? 'bg-red-50 border-red-200' : 'bg-white'}`}
+                          className={`rounded-xl ring-1 ring-gray-100 p-3 ${isExpired ? 'bg-red-50 border-red-200' : 'bg-white'}`}
                         >
                           <div className="flex items-center justify-between mb-2">
                             <span className={`px-2 py-1 rounded text-xs font-medium ${
@@ -1537,7 +1659,7 @@ const copySelectedContent = async (content: string, label: string) => {
                                 onClick={() => revokeShareLink(share.share_token)}
                                 className="text-red-600 hover:text-red-700 text-sm px-2 py-1"
                               >
-                                🗑️ Revoke
+                                🗒️ Revoke
                               </button>
                             </div>
                           </div>
@@ -1624,6 +1746,17 @@ const copySelectedContent = async (content: string, label: string) => {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Click outside handler for mobile delete menus */}
+      {isMobile && (showProjectDeleteMenu || showThreadDeleteMenu) && (
+        <div 
+          className="fixed inset-0 z-10" 
+          onClick={() => {
+            setShowProjectDeleteMenu(null);
+            setShowThreadDeleteMenu(null);
+          }}
+        />
+      )}
     </div>
   );
 };
