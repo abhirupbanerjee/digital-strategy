@@ -39,89 +39,7 @@ interface ShareLink {
   shareUrl: string;
 }
 
-// Helper function to extract text content
-const extractTextContent = (content: any): string => {
-  if (typeof content === 'string') {
-    // Convert <br> tags to newlines and clean up
-    let cleaned = content
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/&lt;br\s*\/?&gt;/gi, '\n')
-      .replace(/\s*<br>\s*/gi, '\n')
-      .replace(/\s*&lt;br&gt;\s*/gi, '\n');
-    
-    // Clean up old search artifacts that might be stored in the database
-    cleaned = cleanSearchArtifactsFromContent(cleaned);
-    
-    return cleaned;
-  }
-  
-  if (typeof content === 'object' && content !== null) {
-    if (Array.isArray(content)) {
-      return content
-        .map(item => {
-          if (typeof item === 'string') {
-            let cleaned = item.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
-            return cleanSearchArtifactsFromContent(cleaned);
-          }
-          if (item.type === 'text' && item.text) {
-            let cleaned = item.text.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
-            return cleanSearchArtifactsFromContent(cleaned);
-          }
-          if (item.text && typeof item.text === 'string') {
-            let cleaned = item.text.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
-            return cleanSearchArtifactsFromContent(cleaned);
-          }
-          return '';
-        })
-        .filter(Boolean)
-        .join('\n');
-    }
-    
-    if (content.text && typeof content.text === 'string') {
-      let cleaned = content.text.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
-      return cleanSearchArtifactsFromContent(cleaned);
-    }
-    
-    if (typeof content.content === 'string') {
-      let cleaned = content.content.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
-      return cleanSearchArtifactsFromContent(cleaned);
-    }
-    
-    try {
-      return JSON.stringify(content, null, 2);
-    } catch {
-      return '[Complex content - cannot display]';
-    }
-  }
-  
-  return String(content || '');
-};
 
-// Helper function to clean search artifacts from stored content
-const cleanSearchArtifactsFromContent = (text: string): string => {
-  let cleaned = text;
-  
-  // Remove old-style search context markers
-  cleaned = cleaned.replace(/\[Current Web Information[^\]]*\]:\s*/gi, '');
-  cleaned = cleaned.replace(/Web Summary:\s*[^\n]*\n/gi, '');
-  cleaned = cleaned.replace(/Top Search Results:\s*\n[\s\S]*?Instructions:[^\n]*\n/gi, '');
-  cleaned = cleaned.replace(/Instructions: Please incorporate this current web information[^\n]*\n?/gi, '');
-  cleaned = cleaned.replace(/\[Note: Web search was requested[^\]]*\]/gi, '');
-  
-  // Remove search result patterns
-  cleaned = cleaned.replace(/\d+\.\s+\[PDF\]\s+[^\n]*\n\s*[^\n]*\.\.\.\s*Source:\s*https?:\/\/[^\s]+\s*/gi, '');
-  cleaned = cleaned.replace(/\d+\.\s+[^.]+\.\.\.\s*Source:\s*https?:\/\/[^\s]+\s*/gi, '');
-  
-  // Clean up common search instruction patterns
-  cleaned = cleaned.replace(/^\s*---\s*\n/gm, '');
-  cleaned = cleaned.replace(/\n{3,}/g, '\n\n'); // Collapse multiple newlines
-  cleaned = cleaned.replace(/^\s+|\s+$/g, ''); // Trim whitespace
-  
-  return cleaned;
-};
-
-const randomColor = () => `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0')}`;
-const SEARCH_FLAG = '___WEB_SEARCH_IN_PROGRESS___';
 
 const ChatApp = () => {
   // Main States
@@ -219,45 +137,429 @@ const ChatApp = () => {
 
   // Thread Sync Function - NEW
   const syncProjectThreads = async (projectId: string, threadIds: string[]) => {
-    if (!threadIds || threadIds.length === 0) {
-      alert('No threads to sync');
-      return;
+  if (!threadIds || threadIds.length === 0) {
+    alert('No threads to sync');
+    return;
+  }
+  
+  try {
+    console.log('Starting thread sync for project:', projectId);
+    
+    const response = await fetch('/api/sync-threads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, threadIds, generateSmartTitles: true })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Sync failed: ${response.status}`);
     }
     
-    try {
-      console.log('Starting thread sync for project:', projectId);
-      
-      const response = await fetch('/api/sync-threads', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId, threadIds })
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Sync failed: ${response.status}`);
-      }
-      
-      const result = await response.json();
-      console.log('Sync results:', result);
-      
-      const message = `Thread Sync Complete!\n\n` +
-        `Total: ${result.totalThreads}\n` +
-        `Synced: ${result.synced}\n` +
-        `Errors: ${result.errors}\n\n` +
-        `Check console for details.`;
-      
-      alert(message);
-      
-      // Reload the project to show synced threads
-      if (result.synced > 0) {
-        await loadProject(projectId);
-      }
-      
-    } catch (error: any) {
-      console.error('Sync error:', error);
-      alert(`Failed to sync threads: ${error.message}`);
+    const result = await response.json();
+    console.log('Sync results:', result);
+    
+    const message = `Thread Sync Complete!\n\n` +
+      `Total: ${result.totalThreads}\n` +
+      `Synced: ${result.synced}\n` +
+      `Smart Titles Generated: ${result.smartTitlesGenerated || result.synced}\n` +
+      `Errors: ${result.errors}\n\n` +
+      `All threads now have intelligent titles based on their content.`;
+    
+    alert(message);
+    
+    // Reload the project to show synced threads with smart titles
+    if (result.synced > 0) {
+      await loadProject(projectId);
     }
+    
+  } catch (error: any) {
+    console.error('Sync error:', error);
+    alert(`Failed to sync threads: ${error.message}`);
+  }
+};
+
+
+  // Helper function to extract text content
+  const extractTextContent = (content: any): string => {
+    if (typeof content === 'string') {
+      // Convert <br> tags to newlines and clean up
+      let cleaned = content
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/&lt;br\s*\/?&gt;/gi, '\n')
+        .replace(/\s*<br>\s*/gi, '\n')
+        .replace(/\s*&lt;br&gt;\s*/gi, '\n');
+      
+      // Clean up old search artifacts that might be stored in the database
+      cleaned = cleanSearchArtifactsFromContent(cleaned);
+      
+      return cleaned;
+    }
+    
+    if (typeof content === 'object' && content !== null) {
+      if (Array.isArray(content)) {
+        return content
+          .map(item => {
+            if (typeof item === 'string') {
+              let cleaned = item.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
+              return cleanSearchArtifactsFromContent(cleaned);
+            }
+            if (item.type === 'text' && item.text) {
+              let cleaned = item.text.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
+              return cleanSearchArtifactsFromContent(cleaned);
+            }
+            if (item.text && typeof item.text === 'string') {
+              let cleaned = item.text.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
+              return cleanSearchArtifactsFromContent(cleaned);
+            }
+            return '';
+          })
+          .filter(Boolean)
+          .join('\n');
+      }
+      
+      if (content.text && typeof content.text === 'string') {
+        let cleaned = content.text.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
+        return cleanSearchArtifactsFromContent(cleaned);
+      }
+      
+      if (typeof content.content === 'string') {
+        let cleaned = content.content.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
+        return cleanSearchArtifactsFromContent(cleaned);
+      }
+      
+      try {
+        return JSON.stringify(content, null, 2);
+      } catch {
+        return '[Complex content - cannot display]';
+      }
+    }
+    
+    return String(content || '');
   };
+
+  // Enhanced function to generate intelligent thread titles
+  const generateSmartThreadTitle = (messages: Message[]): string => {
+    if (!messages || messages.length === 0) {
+      return "New Chat";
+    }
+
+    // Get first three substantial user messages (skip greetings like "Hi")
+    const userMessages = messages
+      .filter(msg => 
+        msg.role === "user" && 
+        typeof msg.content === 'string' && 
+        msg.content.trim().length > 5 &&
+        !msg.content.trim().toLowerCase().match(/^(hi|hello|hey|good morning|good afternoon|good evening|thanks|thank you)$/i)
+      )
+      .slice(0, 3);
+
+    if (userMessages.length === 0) {
+      return "New Chat";
+    }
+
+    // Combine content from up to 3 messages to get better context
+    let content = userMessages
+      .map(msg => typeof msg.content === 'string' ? msg.content.trim() : '')
+      .join(' ');
+    
+    // Clean up the content
+    content = content.replace(/\n+/g, ' '); // Replace newlines with spaces
+    content = content.replace(/\s+/g, ' '); // Normalize whitespace
+    
+    // Remove common question words and phrases at the start for cleaner titles
+    content = content.replace(/^(what|how|why|when|where|who|which|can you|could you|please|help me|i need|i want|tell me|explain|show me)\s+/i, '');
+    
+    // Remove question marks and exclamation points from the end
+    content = content.replace(/[?!]+$/, '');
+    
+    // Capitalize first letter
+    content = content.charAt(0).toUpperCase() + content.slice(1);
+    
+    // Truncate to reasonable length and add ellipsis if needed
+    if (content.length > 50) {
+      // Try to cut at a word boundary
+      const truncated = content.substring(0, 47);
+      const lastSpace = truncated.lastIndexOf(' ');
+      if (lastSpace > 20) {
+        content = truncated.substring(0, lastSpace) + '...';
+      } else {
+        content = truncated + '...';
+      }
+    }
+    
+    // Fallback if content becomes too short after processing
+    if (content.length < 3) {
+      return `Chat - ${new Date().toLocaleDateString()}`;
+    }
+    
+    return content;
+  };
+
+  // Enhanced function to generate titles based on conversation topic
+  const generateContextualTitle = (messages: Message[]): string => {
+    if (!messages || messages.length === 0) {
+      return "New Chat";
+    }
+
+    // Get first three substantial user messages for better context
+    const userMessages = messages
+      .filter(msg => 
+        msg.role === "user" && 
+        typeof msg.content === 'string' &&
+        msg.content.trim().length > 5 &&
+        !msg.content.trim().toLowerCase().match(/^(hi|hello|hey|good morning|good afternoon|good evening|thanks|thank you)$/i)
+      )
+      .slice(0, 3)
+      .map(msg => msg.content.toLowerCase());
+
+    if (userMessages.length === 0) {
+      return "New Chat";
+    }
+
+    // Define topic keywords and their corresponding titles
+    const topicPatterns = [
+            {
+        keywords: ['Antigua and Barbuda', 'Antigua', 'Barbuda'],
+        title: 'Antigua and Barbuda'
+      },
+      {
+        keywords: ['Bahamas', 'The Bahamas'],
+        title: 'Bahamas'
+      },
+      {
+        keywords: ['Barbados'],
+        title: 'Barbados'
+      },
+      {
+        keywords: ['Belize'],
+        title: 'Belize'
+      },
+      {
+        keywords: ['Cuba'],
+        title: 'Cuba'
+      },
+      {
+        keywords: ['Dominica'],
+        title: 'Dominica'
+      },
+      {
+        keywords: ['Dominican Republic', 'DR'],
+        title: 'Dominican Republic'
+      },
+      {
+        keywords: ['Grenada'],
+        title: 'Grenada'
+      },
+      {
+        keywords: ['Guyana'],
+        title: 'Guyana'
+      },
+      {
+        keywords: ['Haiti'],
+        title: 'Haiti'
+      },
+      {
+        keywords: ['Jamaica'],
+        title: 'Jamaica'
+      },
+      {
+        keywords: ['Saint Kitts and Nevis', 'St Kitts and Nevis', 'St Kitts', 'Nevis'],
+        title: 'Saint Kitts and Nevis'
+      },
+      {
+        keywords: ['Saint Lucia', 'St Lucia'],
+        title: 'Saint Lucia'
+      },
+      {
+        keywords: [
+          'Saint Vincent and the Grenadines',
+          'St Vincent and the Grenadines',
+          'Saint Vincent',
+          'St Vincent',
+          'SVG'
+        ],
+        title: 'Saint Vincent and the Grenadines'
+      },
+      {
+        keywords: ['Suriname'],
+        title: 'Suriname'
+      },
+      {
+        keywords: ['Trinidad and Tobago', 'Trinidad', 'Tobago', 'T&T'],
+        title: 'Trinidad and Tobago'
+      },
+      {
+        keywords: ['Aruba'],
+        title: 'Aruba'
+      },
+      {
+        keywords: ['Curaçao', 'Curacao'],
+        title: 'Curaçao'
+      },
+      {
+        keywords: ['Sint Maarten', 'St Maarten (Dutch)', 'St Maarten'],
+        title: 'Sint Maarten'
+      },
+      {
+        keywords: ['Bermuda'],
+        title: 'Bermuda'
+      },
+      {
+        keywords: ['Cayman Islands', 'Cayman'],
+        title: 'Cayman Islands'
+      },
+      {
+        keywords: ['Turks and Caicos Islands', 'Turks and Caicos', 'Turks & Caicos', 'TCI'],
+        title: 'Turks and Caicos Islands'
+      },
+      {
+        keywords: ['British Virgin Islands', 'BVI'],
+        title: 'British Virgin Islands'
+      },
+      {
+        keywords: ['Anguilla'],
+        title: 'Anguilla'
+      },
+      {
+        keywords: ['Montserrat'],
+        title: 'Montserrat'
+      },
+      {
+        keywords: ['Guadeloupe'],
+        title: 'Guadeloupe'
+      },
+      {
+        keywords: ['Martinique'],
+        title: 'Martinique'
+      },
+      {
+        keywords: ['Saint Martin (French)', 'St Martin (French)', 'Saint Martin FR', 'St Martin FR'],
+        title: 'Saint Martin (French)'
+      },
+      {
+        keywords: ['Saint Barthélemy', 'St Barthelemy', 'St Barts', 'Saint Barts'],
+        title: 'Saint Barthélemy'
+      },
+      {
+        keywords: ['Puerto Rico', 'PR'],
+        title: 'Puerto Rico'
+      },
+      {
+        keywords: ['United States Virgin Islands', 'US Virgin Islands', 'USVI'],
+        title: 'United States Virgin Islands'
+      },
+      {
+        keywords: ['United Kingdom', 'UK', 'Britain', 'Great Britain', 'England'],
+        title: 'United Kingdom'
+      },
+      {
+        keywords: ['United States', 'United States of America', 'USA', 'US', 'America'],
+        title: 'United States'
+      },
+      {
+        keywords: ['India', 'Republic of India', 'Bharat'],
+        title: 'India'
+      },
+      {
+        keywords: ['strategy', 'strategic', 'planning', 'roadmap', 'vision'],
+        title: 'Strategic Planning Discussion'
+      },
+      {
+        keywords: ['digital', 'transformation', 'digitalization', 'modernization'],
+        title: 'Digital Transformation'
+      },
+      {
+        keywords: ['api', 'apis', 'integration', 'endpoint', 'rest', 'graphql'],
+        title: 'API Development'
+      },
+      {
+        keywords: ['database', 'sql', 'query', 'schema', 'migration'],
+        title: 'Database Design'
+      },
+      {
+        keywords: ['security', 'authentication', 'authorization', 'encryption', 'cybersecurity'],
+        title: 'Security Discussion'
+      },
+      {
+        keywords: ['ui', 'ux', 'design', 'interface', 'user experience', 'frontend'],
+        title: 'UI/UX Design'
+      },
+      {
+        keywords: ['performance', 'optimization', 'speed', 'efficiency', 'scalability'],
+        title: 'Performance Optimization'
+      },
+      {
+        keywords: ['testing', 'qa', 'quality assurance', 'unit test', 'integration test'],
+        title: 'Testing & QA'
+      },
+      {
+        keywords: ['deployment', 'devops', 'ci/cd', 'pipeline', 'infrastructure'],
+        title: 'DevOps & Deployment'
+      },
+      {
+        keywords: ['government', 'policy', 'regulation', 'compliance', 'public sector'],
+        title: 'Government Policy Discussion'
+      },
+      {
+        keywords: ['caribbean', 'regional', 'island', 'tourism', 'development'],
+        title: 'Caribbean Development'
+      },
+      {
+        keywords: ['budget', 'cost', 'pricing', 'financial', 'economics'],
+        title: 'Budget Planning'
+      },
+      {
+        keywords: ['project', 'management', 'timeline', 'milestone', 'deadline'],
+        title: 'Project Management'
+      },
+      {
+        keywords: ['research', 'analysis', 'study', 'investigation', 'report'],
+        title: 'Research & Analysis'
+      }
+
+    ];
+
+    // Check for topic patterns
+    const allText = userMessages.join(' ');
+    for (const pattern of topicPatterns) {
+      const matchCount = pattern.keywords.reduce((count, keyword) => {
+        return count + (allText.includes(keyword) ? 1 : 0);
+      }, 0);
+      
+      if (matchCount >= 1) {
+        return pattern.title;
+      }
+    }
+
+    // Fall back to first message processing
+    return generateSmartThreadTitle(messages);
+  };
+
+  // Helper function to clean search artifacts from stored content
+  const cleanSearchArtifactsFromContent = (text: string): string => {
+    let cleaned = text;
+    
+    // Remove old-style search context markers
+    cleaned = cleaned.replace(/\[Current Web Information[^\]]*\]:\s*/gi, '');
+    cleaned = cleaned.replace(/Web Summary:\s*[^\n]*\n/gi, '');
+    cleaned = cleaned.replace(/Top Search Results:\s*\n[\s\S]*?Instructions:[^\n]*\n/gi, '');
+    cleaned = cleaned.replace(/Instructions: Please incorporate this current web information[^\n]*\n?/gi, '');
+    cleaned = cleaned.replace(/\[Note: Web search was requested[^\]]*\]/gi, '');
+    
+    // Remove search result patterns
+    cleaned = cleaned.replace(/\d+\.\s+\[PDF\]\s+[^\n]*\n\s*[^\n]*\.\.\.\s*Source:\s*https?:\/\/[^\s]+\s*/gi, '');
+    cleaned = cleaned.replace(/\d+\.\s+[^.]+\.\.\.\s*Source:\s*https?:\/\/[^\s]+\s*/gi, '');
+    
+    // Clean up common search instruction patterns
+    cleaned = cleaned.replace(/^\s*---\s*\n/gm, '');
+    cleaned = cleaned.replace(/\n{3,}/g, '\n\n'); // Collapse multiple newlines
+    cleaned = cleaned.replace(/^\s+|\s+$/g, ''); // Trim whitespace
+    
+    return cleaned;
+  };
+
+  const randomColor = () => `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0')}`;
+  const SEARCH_FLAG = '___WEB_SEARCH_IN_PROGRESS___';
 
   // Project Management Functions
   const deleteProject = async (projectId: string) => {
@@ -477,17 +779,21 @@ const ChatApp = () => {
     }
   };
 
+  // Enhanced saveThreadToProjectWithId function
   const saveThreadToProjectWithId = async (newThreadId: string) => {
     if (!currentProject) return;
-  
+
+    // Generate smart title from messages with contextual awareness
+    const smartTitle = generateContextualTitle(messages);
+
     const thread: Thread = {
       id: newThreadId,
       projectId: currentProject.id,
-      title: messages[0]?.content.substring(0, 50) || "New Chat",
+      title: smartTitle,
       lastMessage: messages[messages.length - 1]?.content.substring(0, 100),
       createdAt: new Date().toISOString()
     };
-  
+
     try {
       const response = await fetch('/api/threads', {
         method: 'POST',
@@ -508,7 +814,7 @@ const ChatApp = () => {
           return p;
         }));
         
-        console.log('Thread saved successfully:', newThreadId);
+        console.log('Thread saved successfully with smart title:', smartTitle);
       } else {
         console.error('Failed to save thread:', await response.text());
       }
@@ -516,14 +822,71 @@ const ChatApp = () => {
       console.error("Save Thread To Project error:", error);
     }
   };
-  
+
+  // Function to bulk update existing threads with smart titles
+  const updateAllThreadTitles = async () => {
+    if (!currentProject) {
+      alert('Please select a project first');
+      return;
+    }
+
+    if (!confirm('This will update all "New Chat" threads in this project with smart titles based on their content. Continue?')) {
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/update-thread-titles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: currentProject.id })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update thread titles');
+      }
+
+      const result = await response.json();
+      
+      if (result.success) {
+        // Update local state with new titles
+        if (result.results) {
+          const updatedThreads = result.results
+            .filter((r: any) => r.status === 'updated')
+            .map((r: any) => ({ id: r.threadId, title: r.newTitle }));
+          
+          setThreads(prev => prev.map(t => {
+            const updated = updatedThreads.find((ut: any) => ut.id === t.id);
+            return updated ? { ...t, title: updated.title } : t;
+          }));
+        }
+
+        const message = `Title Update Complete!\n\n` +
+          `Updated: ${result.updated}\n` +
+          `Total processed: ${result.total}\n\n` +
+          `All eligible threads now have smart titles!`;
+        
+        alert(message);
+      } else {
+        throw new Error(result.error || 'Unknown error');
+      }
+
+    } catch (error: any) {
+      console.error('Failed to update thread titles:', error);
+      alert(`Failed to update thread titles: ${error.message}`);
+    }
+  };
+
+  // Enhanced saveThreadToProject function
   const saveThreadToProject = async () => {
     if (!threadId || !currentProject) return;
-  
+
+    // Generate smart title from messages with contextual awareness
+    const smartTitle = generateContextualTitle(messages);
+
     const thread: Thread = {
       id: threadId,
       projectId: currentProject.id,
-      title: messages[0]?.content.substring(0, 50) || "New Chat",
+      title: smartTitle,
       lastMessage: messages[messages.length - 1]?.content.substring(0, 100),
       createdAt: new Date().toISOString()
     };
@@ -537,7 +900,10 @@ const ChatApp = () => {
       
       setThreads(prev => {
         const existing = prev.find(t => t.id === threadId);
-        if (existing) return prev;
+        if (existing) {
+          // Update existing thread with new smart title
+          return prev.map(t => t.id === threadId ? { ...t, title: smartTitle } : t);
+        }
         return [...prev, thread];
       });
       
@@ -550,6 +916,8 @@ const ChatApp = () => {
         }
         return p;
       }));
+
+      console.log('Thread updated with smart title:', smartTitle);
     } catch (error) {
       console.error("Save Thread To Project error:", error);
     }
