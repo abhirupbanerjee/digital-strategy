@@ -1,3 +1,4 @@
+// app/api/threads/[id]/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
@@ -10,18 +11,36 @@ export async function DELETE(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const params = await context.params;
-  
-  // Delete thread from Supabase
-  const { error } = await supabase
-    .from('threads')
-    .delete()
-    .eq('id', params.id);
+  try {
+    const params = await context.params;
+    const { id } = params;
 
-  if (error) return NextResponse.json({ error }, { status: 500 });
-  
-  // Note: OpenAI thread remains (you can't delete via API)
-  // but reference is removed from your database
-  
-  return NextResponse.json({ success: true });
+    if (!id) {
+      return NextResponse.json({ error: 'Thread ID is required' }, { status: 400 });
+    }
+
+    console.log('Deleting thread:', id);
+
+    // Delete thread from database
+    const { error } = await supabase
+      .from('threads')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('Supabase delete error:', error);
+      return NextResponse.json({ error: 'Failed to delete thread' }, { status: 500 });
+    }
+
+    console.log('Thread deleted successfully');
+
+    return NextResponse.json({ success: true });
+
+  } catch (error: any) {
+    console.error('Thread delete error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
 }

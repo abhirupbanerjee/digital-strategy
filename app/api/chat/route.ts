@@ -74,9 +74,27 @@ function extractTextFromOpenAIResponse(assistantMsg: any): string {
   }
 }
 
+// Helper function to clean response from search artifacts
+function cleanResponseFromSearchArtifacts(response: string): string {
+  let cleaned = response;
+  
+  // Remove search context markers
+  cleaned = cleaned.replace(/\[Current Web Information[^\]]*\]:\s*/gi, '');
+  cleaned = cleaned.replace(/Web Summary:\s*[^\n]*\n/gi, '');
+  cleaned = cleaned.replace(/Top Search Results:\s*\n[\s\S]*?Instructions:[^\n]*\n/gi, '');
+  cleaned = cleaned.replace(/Instructions: Please incorporate this current web information[^\n]*\n?/gi, '');
+  cleaned = cleaned.replace(/\[Note: Web search was requested[^\]]*\]/gi, '');
+  
+  // Clean up any leftover formatting
+  cleaned = cleaned.replace(/^\s*\n+/, ''); // Remove leading newlines
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n'); // Collapse multiple newlines
+  
+  return cleaned.trim();
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const { message, threadId, webSearchEnabled, fileIds, shareToken } = await request.json();
+    const { message, originalMessage, threadId, webSearchEnabled, fileIds, shareToken } = await request.json();
 
     // Validate share token if provided
     if (shareToken) {
@@ -165,16 +183,17 @@ export async function POST(request: NextRequest) {
     // Web search enhancement
     let enhancedMessage = message;
     let searchSources: any[] = [];
+    let webSearchPerformed = false;
     
     if (webSearchEnabled && TAVILY_API_KEY) {
       try {
-        console.log('Performing Tavily search for:', message);
+        console.log('Performing Tavily search for:', originalMessage || message);
         
         const searchResponse = await axios.post(
           'https://api.tavily.com/search',
           {
             api_key: TAVILY_API_KEY,
-            query: message,
+            query: originalMessage || message, // Use original message for search
             search_depth: 'basic',
             include_answer: true,
             max_results: 5,
@@ -188,15 +207,16 @@ export async function POST(request: NextRequest) {
         
         if (searchResponse.data) {
           const data = searchResponse.data;
+          webSearchPerformed = true;
           
-          enhancedMessage = `${message}\n\n[Current Web Information - ${new Date().toLocaleString()}]:\n`;
+          enhancedMessage = `${message}\n\n[INTERNAL SEARCH CONTEXT - DO NOT INCLUDE IN RESPONSE]:\n`;
           
           if (data.answer) {
             enhancedMessage += `\nWeb Summary: ${data.answer}\n`;
           }
           
           if (data.results && data.results.length > 0) {
-            enhancedMessage += '\nTop Search Results:\n';
+            enhancedMessage += '\nCurrent Web Information:\n';
             data.results.forEach((result: any, idx: number) => {
               enhancedMessage += `${idx + 1}. ${result.title}\n`;
               enhancedMessage += `   ${result.content.substring(0, 200)}...\n`;
@@ -210,7 +230,7 @@ export async function POST(request: NextRequest) {
             });
           }
           
-          enhancedMessage += '\nInstructions: Please incorporate this current web information in your response and cite sources when appropriate.';
+          enhancedMessage += '\n[END SEARCH CONTEXT]\n\nIMPORTANT: Please provide a natural response incorporating relevant information from the search results above. Cite sources naturally when using specific information, but do not mention the search context formatting. Focus on being helpful and accurate.';
           console.log('Web search enhanced message created');
         }
       } catch (searchError: any) {
@@ -219,34 +239,62 @@ export async function POST(request: NextRequest) {
       }
     }
     
-    // Prepare message with attachments
-    const messagePayload: any = {
+    // Prepare message with attachments - use ORIGINAL message for thread storage
+    interface MessageForThread {
+      role: string;
+      content: any;
+      attachments?: Array<{
+        file_id: string;
+        tools: Array<{ type: string }>;
+      }>;
+    }
+
+    const messageForThread: MessageForThread = {
       role: 'user',
-      content: enhancedMessage
+      content: originalMessage || message // Store original, clean message in thread
     };
 
     if (fileIds && fileIds.length > 0) {
-      messagePayload.attachments = fileIds.map((fileId: string) => ({
+      messageForThread.attachments = fileIds.map((fileId: string) => ({
         file_id: fileId,
         tools: [{ type: "file_search" }]
       }));
     }
 
-    // Add message to thread
-    console.log('Adding message to thread...');
+    // Add ORIGINAL message to thread (not enhanced)
+    console.log('Adding original message to thread...');
     try {
       await axios.post(
         `https://api.openai.com/v1/threads/${currentThreadId}/messages`,
-        messagePayload,
+        messageForThread,
         { headers }
       );
-      console.log('Message added to thread');
+      console.log('Original message added to thread');
     } catch (error: any) {
       console.error('Failed to add message:', error.response?.data || error.message);
       return NextResponse.json(
         { error: 'Failed to add message to thread' },
         { status: 500 }
       );
+    }
+
+    // Now add the ENHANCED message for AI processing (this won't be stored permanently)
+    if (webSearchPerformed) {
+      console.log('Adding enhanced search context for AI processing...');
+      try {
+        await axios.post(
+          `https://api.openai.com/v1/threads/${currentThreadId}/messages`,
+          {
+            role: 'user',
+            content: enhancedMessage
+          },
+          { headers }
+        );
+        console.log('Enhanced context added for AI processing');
+      } catch (error: any) {
+        console.error('Failed to add enhanced message:', error.response?.data || error.message);
+        // Continue anyway - we have the original message stored
+      }
     }
 
     // Configure run
@@ -272,7 +320,7 @@ export async function POST(request: NextRequest) {
 
     // Add any additional instructions for web search context
     if (webSearchEnabled && searchSources.length > 0) {
-      runConfig.additional_instructions = "Current web search results have been provided in the message. Please cite sources when using this information. The search was performed to get the most up-to-date information.";
+      runConfig.additional_instructions = "You have access to current web search results. Use this information to provide accurate, up-to-date responses. When citing information from search results, reference sources naturally without exposing internal search formatting.";
     }
 
     // Create run
@@ -355,21 +403,24 @@ export async function POST(request: NextRequest) {
           // Clean up any remaining citation markers or artifacts
           reply = reply.replace(/【\d+:\d+†[^】]+】/g, '');
           reply = reply.replace(/\[sandbox:.*?\]/g, '');
+          
+          // Clean up search artifacts from the response
+          reply = cleanResponseFromSearchArtifacts(reply);
         }
         
-        // Append search sources if available
+        // Append search sources if available (in a clean format)
         if (webSearchEnabled && searchSources.length > 0) {
-          reply += '\n\n---\n📌 **Web Sources Used:**\n';
+          reply += '\n\n---\n**Sources:**\n';
           searchSources.forEach((source, index) => {
             reply += `${index + 1}. [${source.title}](${source.url})`;
             if (source.score) {
-              reply += ` (${(source.score * 100).toFixed(0)}% relevant)`;
+              reply += ` (${(source.score * 100).toFixed(0)}% relevance)`;
             }
             reply += '\n';
           });
         }
         
-        console.log('Reply extracted successfully');
+        console.log('Reply extracted and cleaned successfully');
       } catch (error: any) {
         console.error('Failed to fetch messages:', error.response?.data || error.message);
         reply = 'Failed to fetch response.';
@@ -383,7 +434,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       reply,
       threadId: currentThreadId,
-      status: 'success'
+      status: 'success',
+      webSearchPerformed
     });
 
   } catch (error: any) {

@@ -1,210 +1,158 @@
 // app/api/threads/route.ts
+// Updated to match your actual database schema
+
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-
-export const dynamic = 'force-dynamic';
-export const runtime = 'nodejs';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_KEY!
 );
 
-function errorJson(message: string, status = 500, details?: unknown) {
-  return NextResponse.json({ error: { message, ...(details ? { details } : {}) } }, { status });
-}
-
-// Helper function to extract text content from OpenAI message structure
-function extractTextFromOpenAIMessage(openAIMessage: any): string {
-  try {
-    if (!openAIMessage.content) {
-      return '[No content available]';
-    }
-
-    // Handle array of content items (most common format)
-    if (Array.isArray(openAIMessage.content)) {
-      const textParts: string[] = [];
-      
-      for (const contentItem of openAIMessage.content) {
-        if (contentItem.type === 'text') {
-          // Handle nested text structure
-          if (contentItem.text && typeof contentItem.text === 'object' && contentItem.text.value) {
-            textParts.push(contentItem.text.value);
-          } else if (typeof contentItem.text === 'string') {
-            textParts.push(contentItem.text);
-          }
-        } else if (contentItem.type === 'image_file') {
-          textParts.push('[Image file attached]');
-        } else if (contentItem.type === 'image_url') {
-          textParts.push('[Image URL attached]');
-        } else {
-          // Handle other content types (code interpreter results, etc.)
-          if (contentItem.text && typeof contentItem.text === 'string') {
-            textParts.push(contentItem.text);
-          } else if (typeof contentItem === 'string') {
-            textParts.push(contentItem);
-          }
-        }
-      }
-      
-      return textParts.length > 0 ? textParts.join('\n\n') : '[Content could not be processed]';
-    }
-    
-    // Handle direct string content
-    if (typeof openAIMessage.content === 'string') {
-      return openAIMessage.content;
-    }
-    
-    // Handle object with text property
-    if (typeof openAIMessage.content === 'object' && openAIMessage.content.text) {
-      if (typeof openAIMessage.content.text === 'string') {
-        return openAIMessage.content.text;
-      }
-      if (openAIMessage.content.text.value) {
-        return openAIMessage.content.text.value;
-      }
-    }
-    
-    // Fallback: try to stringify and extract meaningful content
-    const contentStr = JSON.stringify(openAIMessage.content);
-    console.warn('Unexpected content structure:', contentStr);
-    return '[Complex content - please check console for details]';
-    
-  } catch (error) {
-    console.error('Error extracting text from OpenAI message:', error);
-    return '[Error processing message content]';
-  }
-}
-
-// Helper function to process OpenAI messages into frontend format
-function processOpenAIMessages(openAIMessages: any[]): any[] {
-  return openAIMessages.map(msg => {
-    try {
-      return {
-        id: msg.id,
-        role: msg.role,
-        content: extractTextFromOpenAIMessage(msg),
-        timestamp: msg.created_at ? new Date(msg.created_at * 1000).toLocaleString() : undefined,
-        // Preserve any file attachments info if present
-        fileIds: msg.attachments?.map((att: any) => att.file_id) || undefined
-      };
-    } catch (error) {
-      console.error('Error processing OpenAI message:', msg.id, error);
-      return {
-        id: msg.id || 'unknown',
-        role: msg.role || 'assistant',
-        content: '[Error processing this message]',
-        timestamp: new Date().toLocaleString()
-      };
-    }
-  });
+// Helper function to clean search artifacts from stored content
+function cleanSearchArtifactsFromContent(text: string): string {
+  if (typeof text !== 'string') return text;
+  
+  let cleaned = text;
+  
+  // Remove old-style search context markers
+  cleaned = cleaned.replace(/\[Current Web Information[^\]]*\]:\s*/gi, '');
+  cleaned = cleaned.replace(/Web Summary:\s*[^\n]*\n/gi, '');
+  cleaned = cleaned.replace(/Top Search Results:\s*\n[\s\S]*?Instructions:[^\n]*\n/gi, '');
+  cleaned = cleaned.replace(/Instructions: Please incorporate this current web information[^\n]*\n?/gi, '');
+  cleaned = cleaned.replace(/\[Note: Web search was requested[^\]]*\]/gi, '');
+  
+  // Remove detailed search result patterns
+  cleaned = cleaned.replace(/\d+\.\s+\[PDF\]\s+[^\n]*\n\s*[^\n]*\.\.\.\s*Source:\s*https?:\/\/[^\s]+\s*/gi, '');
+  cleaned = cleaned.replace(/\d+\.\s+[^.]+\.\.\.\s*Source:\s*https?:\/\/[^\s]+\s*/gi, '');
+  
+  // Remove search metadata
+  cleaned = cleaned.replace(/Search performed on:\s*[^\n]*\n/gi, '');
+  cleaned = cleaned.replace(/Query:\s*"[^"]*"\s*/gi, '');
+  
+  // Clean up formatting artifacts
+  cleaned = cleaned.replace(/^\s*---\s*\n/gm, '');
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n'); // Collapse multiple newlines
+  cleaned = cleaned.replace(/^\s+|\s+$/g, ''); // Trim whitespace
+  
+  return cleaned;
 }
 
 export async function GET(request: NextRequest) {
-  const threadId = request.nextUrl.searchParams.get('threadId');
-  const limit = Number(request.nextUrl.searchParams.get('limit') ?? 50);
-  const order = (request.nextUrl.searchParams.get('order') ?? 'asc') as 'asc' | 'desc';
-
-  if (!threadId || typeof threadId !== 'string') {
-    return errorJson('`threadId` query param is required', 400);
-  }
-
-  // 1) Get thread metadata from Supabase
-  const { data: threadData, error: threadErr } = await supabase
-    .from('threads')
-    .select('*, project:projects(*)')
-    .eq('id', threadId)
-    .single();
-
-  if (threadErr) return errorJson('Failed to fetch thread metadata', 500, threadErr);
-  if (!threadData) return errorJson('Thread not found', 404);
-
-  // 2) Fetch messages from OpenAI
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${process.env.OPENAI_API_KEY!}`,
-    'OpenAI-Beta': 'assistants=v2',
-    'Content-Type': 'application/json'
-  };
-
-  const url = new URL(`https://api.openai.com/v1/threads/${threadId}/messages`);
-  url.searchParams.set('limit', String(limit));
-  url.searchParams.set('order', order);
-
   try {
-    const response = await fetch(url.toString(), { headers, method: 'GET' });
+    const { searchParams } = new URL(request.url);
+    const threadId = searchParams.get('threadId');
 
-    if (!response.ok) {
-      const err = await response.text();
-      return errorJson('OpenAI messages fetch failed', response.status, err);
+    if (!threadId) {
+      return NextResponse.json({ error: 'Thread ID is required' }, { status: 400 });
     }
 
-    const json = await response.json();
-    const rawMessages = Array.isArray(json?.data) ? json.data : [];
-    
-    // 3) Process OpenAI messages to extract clean text content
-    const processedMessages = processOpenAIMessages(rawMessages);
-    
-    // Log for debugging (remove in production)
-    console.log(`Processed ${processedMessages.length} messages for thread ${threadId}`);
-    
-    return NextResponse.json({ 
-      thread: threadData, 
-      messages: processedMessages 
-    }, { status: 200 });
+    console.log('Fetching thread:', threadId);
 
-  } catch (e) {
-    console.error('Failed to load messages:', e);
-    return errorJson('Failed to load messages', 500, String(e));
+    // Since your schema doesn't store messages in the threads table,
+    // we need to get them from OpenAI directly
+    try {
+      const OpenAI = (await import('openai')).default;
+      const openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+      });
+
+      // Get messages from OpenAI
+      const messages = await openai.beta.threads.messages.list(threadId);
+      
+      // Convert OpenAI messages to our format
+      const formattedMessages = messages.data
+        .reverse() // OpenAI returns newest first, we want oldest first
+        .map(msg => ({
+          role: msg.role,
+          content: msg.content[0]?.type === 'text' 
+            ? cleanSearchArtifactsFromContent(msg.content[0].text.value)
+            : JSON.stringify(msg.content),
+          timestamp: new Date(msg.created_at * 1000).toLocaleString()
+        }));
+
+      console.log(`Thread fetched successfully with ${formattedMessages.length} cleaned messages`);
+
+      return NextResponse.json({
+        threadId: threadId,
+        messages: formattedMessages
+      });
+
+    } catch (openaiError) {
+      console.error('OpenAI error:', openaiError);
+      
+      // Fallback: check if thread exists in database
+      const { data: thread, error } = await supabase
+        .from('threads')
+        .select('*')
+        .eq('id', threadId)
+        .single();
+
+      if (error) {
+        console.error('Supabase error:', error);
+        return NextResponse.json({ error: 'Thread not found' }, { status: 404 });
+      }
+
+      // Return empty messages if can't get from OpenAI
+      return NextResponse.json({
+        threadId: threadId,
+        messages: []
+      });
+    }
+
+  } catch (error: any) {
+    console.error('Thread fetch error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
   }
 }
 
 export async function POST(request: NextRequest) {
-  let body: unknown;
   try {
-    body = await request.json();
-  } catch {
-    return errorJson('Invalid JSON body', 400);
-  }
+    const { id, projectId, title, messages } = await request.json();
 
-  const { id, projectId, title, messages } = (body as Record<string, unknown>) ?? {};
-
-  if (typeof id !== 'string' || !id) return errorJson('`id` is required (string)', 400);
-  if (typeof projectId !== 'string' || !projectId) return errorJson('`projectId` is required (string)', 400);
-  if (title != null && typeof title !== 'string') return errorJson('`title` must be a string if provided', 400);
-
-  const nowIso = new Date().toISOString();
-  const messageCount = Array.isArray(messages) ? messages.length : 0;
-
-  // Extract title from first user message if not provided
-  let threadTitle = title?.trim() || 'New Chat';
-  if ((!title || title.trim() === 'New Chat') && Array.isArray(messages) && messages.length > 0) {
-    const firstUserMessage = messages.find((msg: any) => msg.role === 'user');
-    if (firstUserMessage && firstUserMessage.content) {
-      // Extract text from content (in case it's an object)
-      let content = firstUserMessage.content;
-      if (typeof content === 'object') {
-        content = extractTextFromOpenAIMessage(firstUserMessage);
-      }
-      threadTitle = String(content).substring(0, 50).trim() || 'New Chat';
+    if (!id) {
+      return NextResponse.json({ error: 'Thread ID is required' }, { status: 400 });
     }
-  }
 
-  const { data, error } = await supabase
-    .from('threads')
-    .upsert(
-      {
+    console.log('Saving thread:', id);
+
+    // Calculate message count
+    const messageCount = Array.isArray(messages) ? messages.length : 0;
+
+    // Update your database with the fields that actually exist
+    const { data, error } = await supabase
+      .from('threads')
+      .upsert({
         id,
         project_id: projectId,
-        title: threadTitle,
-        last_activity: nowIso,
+        title: title || 'Untitled Chat',
+        last_activity: new Date().toISOString(),
         message_count: messageCount
-      },
-      { onConflict: 'id' }
-    )
-    .select()
-    .single();
+      })
+      .select()
+      .single();
 
-  if (error) return errorJson('Failed to upsert thread', 500, error);
+    if (error) {
+      console.error('Supabase upsert error:', error);
+      return NextResponse.json({ error: 'Failed to save thread' }, { status: 500 });
+    }
 
-  return NextResponse.json({ thread: data }, { status: 201 });
+    console.log('Thread saved successfully');
+
+    return NextResponse.json({
+      id: data.id,
+      title: data.title,
+      success: true
+    });
+
+  } catch (error: any) {
+    console.error('Thread save error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
 }

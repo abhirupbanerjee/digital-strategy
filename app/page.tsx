@@ -43,20 +43,34 @@ interface ShareLink {
 const extractTextContent = (content: any): string => {
   if (typeof content === 'string') {
     // Convert <br> tags to newlines and clean up
-    return content
+    let cleaned = content
       .replace(/<br\s*\/?>/gi, '\n')
       .replace(/&lt;br\s*\/?&gt;/gi, '\n')
       .replace(/\s*<br>\s*/gi, '\n')
       .replace(/\s*&lt;br&gt;\s*/gi, '\n');
+    
+    // Clean up old search artifacts that might be stored in the database
+    cleaned = cleanSearchArtifactsFromContent(cleaned);
+    
+    return cleaned;
   }
   
   if (typeof content === 'object' && content !== null) {
     if (Array.isArray(content)) {
       return content
         .map(item => {
-          if (typeof item === 'string') return item.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
-          if (item.type === 'text' && item.text) return item.text.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
-          if (item.text && typeof item.text === 'string') return item.text.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
+          if (typeof item === 'string') {
+            let cleaned = item.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
+            return cleanSearchArtifactsFromContent(cleaned);
+          }
+          if (item.type === 'text' && item.text) {
+            let cleaned = item.text.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
+            return cleanSearchArtifactsFromContent(cleaned);
+          }
+          if (item.text && typeof item.text === 'string') {
+            let cleaned = item.text.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
+            return cleanSearchArtifactsFromContent(cleaned);
+          }
           return '';
         })
         .filter(Boolean)
@@ -64,11 +78,13 @@ const extractTextContent = (content: any): string => {
     }
     
     if (content.text && typeof content.text === 'string') {
-      return content.text.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
+      let cleaned = content.text.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
+      return cleanSearchArtifactsFromContent(cleaned);
     }
     
     if (typeof content.content === 'string') {
-      return content.content.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
+      let cleaned = content.content.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
+      return cleanSearchArtifactsFromContent(cleaned);
     }
     
     try {
@@ -79,6 +95,29 @@ const extractTextContent = (content: any): string => {
   }
   
   return String(content || '');
+};
+
+// Helper function to clean search artifacts from stored content
+const cleanSearchArtifactsFromContent = (text: string): string => {
+  let cleaned = text;
+  
+  // Remove old-style search context markers
+  cleaned = cleaned.replace(/\[Current Web Information[^\]]*\]:\s*/gi, '');
+  cleaned = cleaned.replace(/Web Summary:\s*[^\n]*\n/gi, '');
+  cleaned = cleaned.replace(/Top Search Results:\s*\n[\s\S]*?Instructions:[^\n]*\n/gi, '');
+  cleaned = cleaned.replace(/Instructions: Please incorporate this current web information[^\n]*\n?/gi, '');
+  cleaned = cleaned.replace(/\[Note: Web search was requested[^\]]*\]/gi, '');
+  
+  // Remove search result patterns
+  cleaned = cleaned.replace(/\d+\.\s+\[PDF\]\s+[^\n]*\n\s*[^\n]*\.\.\.\s*Source:\s*https?:\/\/[^\s]+\s*/gi, '');
+  cleaned = cleaned.replace(/\d+\.\s+[^.]+\.\.\.\s*Source:\s*https?:\/\/[^\s]+\s*/gi, '');
+  
+  // Clean up common search instruction patterns
+  cleaned = cleaned.replace(/^\s*---\s*\n/gm, '');
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n'); // Collapse multiple newlines
+  cleaned = cleaned.replace(/^\s+|\s+$/g, ''); // Trim whitespace
+  
+  return cleaned;
 };
 
 const randomColor = () => `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0')}`;
@@ -178,6 +217,48 @@ const ChatApp = () => {
     [currentProject]
   );
 
+  // Thread Sync Function - NEW
+  const syncProjectThreads = async (projectId: string, threadIds: string[]) => {
+    if (!threadIds || threadIds.length === 0) {
+      alert('No threads to sync');
+      return;
+    }
+    
+    try {
+      console.log('Starting thread sync for project:', projectId);
+      
+      const response = await fetch('/api/sync-threads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId, threadIds })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Sync failed: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      console.log('Sync results:', result);
+      
+      const message = `Thread Sync Complete!\n\n` +
+        `Total: ${result.totalThreads}\n` +
+        `Synced: ${result.synced}\n` +
+        `Errors: ${result.errors}\n\n` +
+        `Check console for details.`;
+      
+      alert(message);
+      
+      // Reload the project to show synced threads
+      if (result.synced > 0) {
+        await loadProject(projectId);
+      }
+      
+    } catch (error: any) {
+      console.error('Sync error:', error);
+      alert(`Failed to sync threads: ${error.message}`);
+    }
+  };
+
   // Project Management Functions
   const deleteProject = async (projectId: string) => {
     if (!confirm('Delete this project and all its chats? This cannot be undone.')) {
@@ -266,35 +347,80 @@ const ChatApp = () => {
     }
   };
 
+  // Updated loadProject function with sync detection
   const loadProject = async (projectId: string) => {
-    const response = await fetch(`/api/projects/${projectId}`);
-    if (!response.ok) throw new Error('Failed to load project');
-    const data = await response.json();
+    try {
+      console.log('Loading project:', projectId);
+      const response = await fetch(`/api/projects/${projectId}`);
+      if (!response.ok) throw new Error('Failed to load project');
+      const data = await response.json();
+      
+      console.log('Project data received:', data);
 
-    const threadObjs = Array.isArray(data.threads) ? data.threads : [];
-    const threadIds = threadObjs.map((t: any) => t.id);
+      // Handle different possible data structures
+      let threadObjs: any[] = [];
+      let threadIds: string[] = [];
+      
+      if (Array.isArray(data.threads)) {
+        threadObjs = data.threads;
+        threadIds = threadObjs.map((t: any) => t.id || t.thread_id || t);
+      } else if (data.threads && typeof data.threads === 'object') {
+        threadObjs = Object.values(data.threads);
+        threadIds = threadObjs.map((t: any) => t.id || t.thread_id || t);
+      } else if (data.thread_ids && Array.isArray(data.thread_ids)) {
+        // If we only have thread IDs but no thread objects
+        threadIds = data.thread_ids;
+        console.log('Only thread IDs found, may need sync:', threadIds);
+      }
+      
+      console.log('Thread objects extracted:', threadObjs);
+      console.log('Thread IDs:', threadIds);
 
-    setCurrentProject({ ...data, threads: threadIds });
+      setCurrentProject({ ...data, threads: threadIds });
 
-    setThreads(prev => {
-      const next = [
-        ...prev.filter(t => !threadIds.includes(t.id)),
-        ...threadObjs.map((t: any) => ({
-          id: t.id,
+      // Update threads state
+      setThreads(prev => {
+        const filteredPrev = prev.filter(t => !threadIds.includes(t.id));
+        const newThreads = threadObjs.map((t: any) => ({
+          id: t.id || t.thread_id,
           projectId: data.id,
-          title: t.title ?? 'Untitled',
-          lastMessage: '',
-          createdAt: t.created_at ?? new Date().toISOString()
-        }))
-      ];
-      return next;
-    });
+          title: t.title || t.name || 'Untitled',
+          lastMessage: t.lastMessage || t.last_message || '',
+          createdAt: t.createdAt || t.created_at || new Date().toISOString()
+        })).filter(t => t.id);
+        
+        console.log('New threads to add:', newThreads);
+        return [...filteredPrev, ...newThreads];
+      });
 
-    if (threadIds.length > 0) {
-      await loadThread(threadIds[0]);
-    } else {
-      setMessages([]);
-      setThreadId(null);
+      // Check if we have thread IDs but no thread objects (need sync)
+      if (threadIds.length > 0 && threadObjs.length === 0) {
+        console.log('Thread IDs found but no thread data - sync may be needed');
+        
+        // Show sync option to user
+        const shouldSync = confirm(
+          `Found ${threadIds.length} thread(s) that need to be synced from OpenAI.\n\n` +
+          `Would you like to sync them now? This will load the conversations into your database.`
+        );
+        
+        if (shouldSync) {
+          await syncProjectThreads(projectId, threadIds);
+          return; // syncProjectThreads will reload the project
+        }
+      }
+
+      // Load first thread if available
+      if (threadIds.length > 0 && threadIds[0]) {
+        console.log('Loading first thread:', threadIds[0]);
+        await loadThread(threadIds[0]);
+      } else {
+        console.log('No threads to load');
+        setMessages([]);
+        setThreadId(null);
+      }
+    } catch (error) {
+      console.error('Load Project Error:', error);
+      alert('Failed to load project. Check console for details.');
     }
   };
 
@@ -302,15 +428,52 @@ const ChatApp = () => {
     loadProject(project.id);
   };
 
+  // Updated loadThread function with better debugging
   const loadThread = async (threadId: string) => {
     try {
-      const response = await fetch(`/api/threads?threadId=${threadId}`);
-      if (!response.ok) throw new Error('Failed to load thread');
+      console.log('Loading thread:', threadId);
+      
+      // Try the primary endpoint first
+      let response = await fetch(`/api/threads?threadId=${threadId}`);
+      
+      // If that fails, try alternative endpoint structure
+      if (!response.ok) {
+        console.log('Primary endpoint failed, trying alternative...');
+        response = await fetch(`/api/threads/${threadId}`);
+      }
+      
+      if (!response.ok) {
+        throw new Error(`Failed to load thread: ${response.status} ${response.statusText}`);
+      }
+      
       const data = await response.json();
-      setMessages(data.messages);
+      console.log('Thread data received:', data);
+      
+      // Handle different possible response structures
+      let messages = [];
+      if (data.messages) {
+        messages = data.messages;
+      } else if (data.thread && data.thread.messages) {
+        messages = data.thread.messages;
+      } else if (Array.isArray(data)) {
+        messages = data;
+      }
+      
+      console.log('Messages extracted:', messages.length, 'messages');
+      
+      // Clean messages when loading old threads
+      const cleanedMessages = messages.map((msg: Message) => ({
+        ...msg,
+        content: typeof msg.content === 'string' ? cleanSearchArtifactsFromContent(msg.content) : msg.content
+      }));
+      
+      setMessages(cleanedMessages);
       setThreadId(threadId);
+      console.log('Thread loaded successfully');
+      
     } catch (error) {
-      console.error("Load Thread:", error);
+      console.error("Load Thread Error:", error);
+      alert(`Failed to load thread: ${error}`);
     }
   };
 
@@ -649,13 +812,6 @@ const ChatApp = () => {
         setUploadedFiles(prev => [...prev, ...successfulUploads]);
         setMessages(prev => [...prev, {
           role: "system",
-          content: `✅ Successfully uploaded ${successfulUploads.length} file(s): ${successfulUploads.map(f => f.name).join(', ')}`,
-          timestamp: new Date().toLocaleString()
-        }]);
-      }
-      if (failedUploads.length > 0) {
-        setMessages(prev => [...prev, {
-          role: "system",
           content: `❌ Failed to upload: ${failedUploads.join(', ')}`,
           timestamp: new Date().toLocaleString()
         }]);
@@ -699,14 +855,17 @@ const ChatApp = () => {
       enhancedInput = input + formatInstructions[formatPreference];
     }
     
+    // Store the original user message (without search context)
     const userMessage = {
       role: "user",
-      content: input,
+      content: input, // Store original input, not enhanced
       timestamp: new Date().toLocaleString(),
       fileIds: fileIds.length > 0 ? [...fileIds] : undefined
     };
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
+    
+    // Show search indicator if web search is enabled
     if (webSearchEnabled) {
       setMessages(prev => [
         ...prev,
@@ -724,7 +883,8 @@ const ChatApp = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: enhancedInput,
+          message: enhancedInput, // Send enhanced message to API
+          originalMessage: input, // Send original for storage
           threadId: threadId,
           webSearchEnabled: webSearchEnabled,
           fileIds: fileIds.length > 0 ? fileIds : undefined
@@ -750,6 +910,7 @@ const ChatApp = () => {
         }
       }
 
+      // Remove search indicator
       if (webSearchEnabled) {
         setMessages(prev => prev.filter(msg =>
           !(msg.role === "system" && typeof msg.content === 'string' && msg.content.includes(SEARCH_FLAG))
@@ -760,11 +921,21 @@ const ChatApp = () => {
         setFileIds([]);
         setUploadedFiles([]);
       }
+      
+      // Clean the response to remove any search context that might have leaked through
+      let cleanReply = data.reply || "No response received";
+      
+      // Remove any search context markers that might appear
+      cleanReply = cleanReply.replace(/\[Current Web Information[^\]]*\]:\s*/gi, '');
+      cleanReply = cleanReply.replace(/Web Summary:\s*[^\n]*\n/gi, '');
+      cleanReply = cleanReply.replace(/Top Search Results:\s*\n[\s\S]*?Instructions:[^\n]*\n/gi, '');
+      cleanReply = cleanReply.replace(/Instructions: Please incorporate this current web information[^\n]*\n?/gi, '');
+      
       setMessages((prev) => [
         ...prev,
         { 
           role: "assistant", 
-          content: data.reply || "No response received", 
+          content: cleanReply,
           timestamp: new Date().toLocaleString() 
         },
       ]);
@@ -821,6 +992,35 @@ const ChatApp = () => {
     setShowProjectPanel(false);
   };
 
+  // One-time cleanup function for existing threads
+  const cleanupAllThreads = async () => {
+    if (!confirm('This will clean up search artifacts from all your existing chats. Continue?')) {
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/cleanup-threads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        alert(`Cleanup completed! ${data.cleaned} threads were cleaned.`);
+        
+        // Reload current thread if any to show cleaned version
+        if (threadId) {
+          await loadThread(threadId);
+        }
+      } else {
+        throw new Error('Cleanup failed');
+      }
+    } catch (error) {
+      console.error('Cleanup error:', error);
+      alert('Cleanup failed. Please try again.');
+    }
+  };
+
   return (
     <div className="h-[100svh] md:h-screen w-full flex flex-col bg-neutral-50 md:flex-row overflow-hidden">
       {/* Desktop Sidebar / Mobile Menu */}
@@ -848,12 +1048,20 @@ const ChatApp = () => {
                     + New
                   </button>
                   {currentProject && (
-                    <button
-                      onClick={() => setShowShareModal(true)}
-                      className="text-blue-600 hover:text-blue-700 text-sm"
-                    >
-                      🔗 Share
-                    </button>
+                    <>
+                      <button
+                        onClick={() => setShowShareModal(true)}
+                        className="text-blue-600 hover:text-blue-700 text-sm"
+                      >
+                        🔗 Share
+                      </button>
+                      <button
+                        onClick={() => syncProjectThreads(currentProject.id, currentProject.threads)}
+                        className="text-green-600 hover:text-green-700 text-sm"
+                      >
+                        🔄 Sync
+                      </button>
+                    </>
                   )}
                   {isMobile && (
                     <button
@@ -1183,18 +1391,27 @@ const ChatApp = () => {
                     ),
                     table: ({ children, ...props }) => (
                       <div className="overflow-x-auto mb-3 md:mb-4">
-                        <table className="min-w-full border-collapse border border-gray-300 text-sm md:text-base table-auto" {...props}>
+                        <table className="min-w-full border-collapse border border-gray-300 text-sm md:text-base" {...props}>
                           {children}
                         </table>
                       </div>
                     ),
+                    thead: ({ children, ...props }) => (
+                      <thead className="bg-gray-100" {...props}>{children}</thead>
+                    ),
+                    tbody: ({ children, ...props }) => (
+                      <tbody {...props}>{children}</tbody>
+                    ),
+                    tr: ({ children, ...props }) => (
+                      <tr className="border-b border-gray-200" {...props}>{children}</tr>
+                    ),
                     th: ({ children, ...props }) => (
-                      <th className="border border-gray-300 px-2 md:px-4 py-2 md:py-3 text-left font-semibold text-gray-900 bg-gray-100 text-sm md:text-base align-top" {...props}>
+                      <th className="border border-gray-300 px-3 md:px-4 py-2 md:py-3 text-left font-semibold text-gray-900 bg-gray-100 text-sm md:text-base align-top" {...props}>
                         {children}
                       </th>
                     ),
                     td: ({ children, ...props }) => (
-                      <td className="border border-gray-300 px-2 md:px-4 py-2 md:py-3 text-gray-700 text-sm md:text-base whitespace-pre-line align-top" {...props}>
+                      <td className="border border-gray-300 px-3 md:px-4 py-2 md:py-3 text-gray-700 text-sm md:text-base align-top" {...props}>
                         {children}
                       </td>
                     ),
@@ -1452,6 +1669,13 @@ const ChatApp = () => {
                    onClick={copyChatToClipboard}
                   >
                   💬 Copy Chat
+                  </button>
+                  <button
+                    className="flex-1 py-2 px-3 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-sm font-medium transition-colors"
+                    onClick={cleanupAllThreads}
+                    title="Clean search artifacts from all existing chats"
+                    >
+                   🧹 Cleanup Old Chats
                   </button>
                   <button
                     className="flex-1 py-2 px-3 bg-red-400 hover:bg-red-500 text-white rounded-lg text-sm font-medium transition-colors"
