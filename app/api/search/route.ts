@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
           {
             api_key: TAVILY_API_KEY,
             query: query,
-            search_depth: 'advanced', // 'basic' or 'advanced'
+            search_depth: 'basic', // 'basic' or 'advanced'
             include_answer: true, // Get AI-generated answer
             include_images: false,
             include_raw_content: false,

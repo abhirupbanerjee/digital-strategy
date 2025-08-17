@@ -1,4 +1,5 @@
 "use client";
+
 import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { motion, AnimatePresence } from "framer-motion";
@@ -294,6 +295,46 @@ const ChatApp = () => {
     
     return content;
   };
+
+  // Simple function to get or create "Default" project
+const getOrCreateDefaultProject = async (): Promise<Project | null> => {
+  try {
+    // Check if "Default" project already exists
+    let defaultProject = projects.find(p => p.name === "Default");
+    
+    if (defaultProject) {
+      return defaultProject;
+    }
+
+    // Create "Default" project
+    const response = await fetch('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: "Default",
+        description: "Default project for conversations",
+        color: "#6B7280"
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to create Default project');
+    }
+
+    const payload = await response.json();
+    const newDefaultProject = payload.project ?? payload;
+    
+    // Update local state
+    setProjects(prev => [...prev, newDefaultProject]);
+    
+    return newDefaultProject;
+
+  } catch (error) {
+    console.error('Error creating Default project:', error);
+    return null;
+  }
+  };
+
 
   // Enhanced function to generate titles based on conversation topic
   const generateContextualTitle = (messages: Message[]): string => {
@@ -779,49 +820,58 @@ const ChatApp = () => {
     }
   };
 
-  // Enhanced saveThreadToProjectWithId function
-  const saveThreadToProjectWithId = async (newThreadId: string) => {
-    if (!currentProject) return;
 
-    // Generate smart title from messages with contextual awareness
-    const smartTitle = generateContextualTitle(messages);
+// Simplified saveThreadToProjectWithId function
+const saveThreadToProjectWithId = async (newThreadId: string) => {
+  let projectToUse = currentProject;
 
-    const thread: Thread = {
-      id: newThreadId,
-      projectId: currentProject.id,
-      title: smartTitle,
-      lastMessage: messages[messages.length - 1]?.content.substring(0, 100),
-      createdAt: new Date().toISOString()
-    };
-
-    try {
-      const response = await fetch('/api/threads', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...thread, messages })
-      });
-      
-      if (response.ok) {
-        setThreads(prev => [...prev.filter(t => t.id !== newThreadId), thread]);
-        
-        setProjects(prev => prev.map(p => {
-          if (p.id === currentProject.id) {
-            const currentThreads = Array.isArray(p.threads) ? p.threads : [];
-            if (!currentThreads.includes(newThreadId)) {
-              return { ...p, threads: [...currentThreads, newThreadId] };
-            }
-          }
-          return p;
-        }));
-        
-        console.log('Thread saved successfully with smart title:', smartTitle);
-      } else {
-        console.error('Failed to save thread:', await response.text());
-      }
-    } catch (error) {
-      console.error("Save Thread To Project error:", error);
+  // If no project selected, use/create Default project
+  if (!projectToUse) {
+    projectToUse = await getOrCreateDefaultProject();
+    if (!projectToUse) {
+      console.error('Failed to create Default project, cannot save thread');
+      return;
     }
+  }
+
+  const smartTitle = generateContextualTitle(messages);
+
+  const thread: Thread = {
+    id: newThreadId,
+    projectId: projectToUse.id,
+    title: smartTitle,
+    lastMessage: messages[messages.length - 1]?.content.substring(0, 100),
+    createdAt: new Date().toISOString()
   };
+
+  try {
+    const response = await fetch('/api/threads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...thread, messages })
+    });
+    
+    if (response.ok) {
+      setThreads(prev => [...prev.filter(t => t.id !== newThreadId), thread]);
+      
+      setProjects(prev => prev.map(p => {
+        if (p.id === projectToUse!.id) {
+          const currentThreads = Array.isArray(p.threads) ? p.threads : [];
+          if (!currentThreads.includes(newThreadId)) {
+            return { ...p, threads: [...currentThreads, newThreadId] };
+          }
+        }
+        return p;
+      }));
+      
+      console.log(`Thread saved to "${projectToUse.name}" with title: "${smartTitle}"`);
+    } else {
+      console.error('Failed to save thread:', await response.text());
+    }
+  } catch (error) {
+    console.error("Save Thread error:", error);
+  }
+};
 
   // Function to bulk update existing threads with smart titles
   const updateAllThreadTitles = async () => {
@@ -876,50 +926,92 @@ const ChatApp = () => {
     }
   };
 
-  // Enhanced saveThreadToProject function
-  const saveThreadToProject = async () => {
-    if (!threadId || !currentProject) return;
+  // Simple mobile save button
+  const renderMobileSaveButton = () => {
+    if (!threadId || messages.length === 0) {
+      return null;
+    }
 
-    // Generate smart title from messages with contextual awareness
+    const existingThread = threads.find(t => t.id === threadId);
+    
+    if (existingThread) {
+      return (
+        <button className="flex-1 py-2 px-3 bg-gray-400 text-white rounded-lg text-sm">
+          ✅ Saved
+        </button>
+      );
+    }
+
+    return (
+      <button
+        className="flex-1 py-2 px-3 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm"
+        onClick={saveThreadToProject}
+      >
+        💾 Save
+      </button>
+    );
+  };
+
+// Simplified saveThreadToProject function  
+  const saveThreadToProject = async () => {
+    if (!threadId || messages.length === 0) {
+      return;
+    }
+
+    let projectToUse = currentProject;
+
+    // If no project selected, use/create Default project
+    if (!projectToUse) {
+      projectToUse = await getOrCreateDefaultProject();
+      if (!projectToUse) {
+        alert('Failed to create Default project');
+        return;
+      }
+    }
+
+    // Check if already saved
+    const existingThread = threads.find(t => t.id === threadId);
+    if (existingThread) {
+      return; // Already saved
+    }
+
     const smartTitle = generateContextualTitle(messages);
 
     const thread: Thread = {
       id: threadId,
-      projectId: currentProject.id,
+      projectId: projectToUse.id,
       title: smartTitle,
       lastMessage: messages[messages.length - 1]?.content.substring(0, 100),
       createdAt: new Date().toISOString()
     };
     
     try {
-      await fetch('/api/threads', {
+      const response = await fetch('/api/threads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...thread, messages })
       });
       
-      setThreads(prev => {
-        const existing = prev.find(t => t.id === threadId);
-        if (existing) {
-          // Update existing thread with new smart title
-          return prev.map(t => t.id === threadId ? { ...t, title: smartTitle } : t);
-        }
-        return [...prev, thread];
-      });
-      
-      setProjects(prev => prev.map(p => {
-        if (p.id === currentProject.id) {
-          const currentThreads = Array.isArray(p.threads) ? p.threads : [];
-          if (!currentThreads.includes(threadId)) {
-            return { ...p, threads: [...currentThreads, threadId] };
+      if (response.ok) {
+        setThreads(prev => [...prev, thread]);
+        
+        setProjects(prev => prev.map(p => {
+          if (p.id === projectToUse!.id) {
+            const currentThreads = Array.isArray(p.threads) ? p.threads : [];
+            if (!currentThreads.includes(threadId)) {
+              return { ...p, threads: [...currentThreads, threadId] };
+            }
           }
-        }
-        return p;
-      }));
+          return p;
+        }));
 
-      console.log('Thread updated with smart title:', smartTitle);
+        console.log(`Thread saved to "${projectToUse.name}" with title: "${smartTitle}"`);
+      } else {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to save thread');
+      }
     } catch (error) {
-      console.error("Save Thread To Project error:", error);
+      console.error("Manual save error:", error);
     }
   };
 
@@ -2020,56 +2112,56 @@ const ChatApp = () => {
             <div className="flex gap-2">
               {!isMobile && (
                 <>
-                <button
-                  className="flex-1 py-2 px-3 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm font-medium transition-colors"
-                  onClick={copyLastBotResponse}
+                  <button
+                    className="flex-1 py-2 px-3 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm font-medium transition-colors"
+                    onClick={copyLastBotResponse}
                   >
-                  📋 Copy Last Response
-                 </button>
-                <button
-                  className="flex-1 py-2 px-3 bg-purple-500 hover:bg-purple-600 text-white rounded-lg text-sm font-medium transition-colors"
-                  onClick={copyEmbeddedContent}
-                  >
-                  📊 Copy Content
-                </button>
-                <button
-                  className="flex-1 py-2 px-3 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg text-sm font-medium transition-colors"
-                   onClick={copyChatToClipboard}
-                  >
-                  💬 Copy Chat
+                    📋 Copy Last Response
                   </button>
                   <button
-                    className="flex-1 py-2 px-3 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-sm font-medium transition-colors"
-                    onClick={cleanupAllThreads}
-                    title="Clean search artifacts from all existing chats"
+                    className="flex-1 py-2 px-3 bg-purple-500 hover:bg-purple-600 text-white rounded-lg text-sm font-medium transition-colors"
+                    onClick={copyEmbeddedContent}
+                  >
+                    📊 Copy Content
+                  </button>
+                  <button
+                    className="flex-1 py-2 px-3 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg text-sm font-medium transition-colors"
+                    onClick={copyChatToClipboard}
+                  >
+                    💬 Copy Chat
+                  </button>
+                  {/* Add Save button for desktop */}
+                  {threadId && messages.length > 0 && (
+                    <button
+                      className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors ${
+                        threads.find(t => t.id === threadId)
+                          ? 'bg-gray-400 text-white cursor-not-allowed'
+                          : 'bg-green-500 hover:bg-green-600 text-white'
+                      }`}
+                      onClick={saveThreadToProject}
+                      disabled={!!threads.find(t => t.id === threadId)}
                     >
-                   🧹 Cleanup Old Chats
-                  </button>
+                      {threads.find(t => t.id === threadId) ? '✅ Saved' : '💾 Save'}
+                    </button>
+                  )}
                   <button
-                    className="flex-1 py-2 px-3 bg-red-400 hover:bg-red-500 text-white rounded-lg text-sm font-medium transition-colors"
+                     className="flex-1 py-2 px-3 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm"
                     onClick={clearChat}
-                    >
-                   🗒️ Clear Chat
+                  >
+                    🗒️ Clear Chat
                   </button>
-                   </>
+                </>
               )}
               
               {isMobile && (
                 <div className="flex gap-2 w-full">
                   <button
-                    className="flex-1 py-2 px-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-sm"
+                    className="flex-1 py-2 px-3 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm"
                     onClick={clearChat}
                   >
                     🗒️ Clear
                   </button>
-                  {currentProject && (
-                    <button
-                      className="flex-1 py-2 px-3 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm"
-                      onClick={saveThreadToProject}
-                    >
-                      💾 Save
-                    </button>
-                  )}
+                  {renderMobileSaveButton()}
                 </div>
               )}
             </div>

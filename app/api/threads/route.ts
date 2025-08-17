@@ -9,7 +9,32 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY!
 );
 
-// Helper function to clean search artifacts from stored content
+// Helper function to remove search artifacts from message content
+function cleanSearchArtifacts(text: string): string {
+  if (typeof text !== 'string') return text;
+  
+  let cleaned = text;
+  
+  // Remove the complete search context blocks
+  cleaned = cleaned.replace(
+    /\[INTERNAL SEARCH CONTEXT[^\]]*\]:[^]*?\[END SEARCH CONTEXT\]/gi, 
+    ''
+  );
+  
+  // Remove any remaining IMPORTANT instructions
+  cleaned = cleaned.replace(
+    /IMPORTANT:\s*Please provide a natural response[^\n]*\n?/gi, 
+    ''
+  );
+  
+  // Clean up extra whitespace and newlines
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n'); // Collapse multiple newlines
+  cleaned = cleaned.trim(); // Remove leading/trailing whitespace
+  
+  return cleaned;
+}
+
+// Helper function to clean search artifacts from stored content - may remove as this is deleted
 function cleanSearchArtifactsFromContent(text: string): string {
   if (typeof text !== 'string') return text;
   
@@ -38,6 +63,7 @@ function cleanSearchArtifactsFromContent(text: string): string {
   return cleaned;
 }
 
+// Updated GET function in app/api/threads/route.ts
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -49,8 +75,6 @@ export async function GET(request: NextRequest) {
 
     console.log('Fetching thread:', threadId);
 
-    // Since your schema doesn't store messages in the threads table,
-    // we need to get them from OpenAI directly
     try {
       const OpenAI = (await import('openai')).default;
       const openai = new OpenAI({
@@ -60,18 +84,18 @@ export async function GET(request: NextRequest) {
       // Get messages from OpenAI
       const messages = await openai.beta.threads.messages.list(threadId);
       
-      // Convert OpenAI messages to our format
+      // Convert OpenAI messages to our format AND clean search artifacts
       const formattedMessages = messages.data
         .reverse() // OpenAI returns newest first, we want oldest first
         .map(msg => ({
           role: msg.role,
           content: msg.content[0]?.type === 'text' 
-            ? cleanSearchArtifactsFromContent(msg.content[0].text.value)
+            ? cleanSearchArtifacts(msg.content[0].text.value) // Clean artifacts here
             : JSON.stringify(msg.content),
           timestamp: new Date(msg.created_at * 1000).toLocaleString()
         }));
 
-      console.log(`Thread fetched successfully with ${formattedMessages.length} cleaned messages`);
+      console.log(`Thread fetched and cleaned successfully with ${formattedMessages.length} messages`);
 
       return NextResponse.json({
         threadId: threadId,
