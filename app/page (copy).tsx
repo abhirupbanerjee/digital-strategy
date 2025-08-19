@@ -63,7 +63,7 @@ const ChatApp = () => {
   const [uploadingFile, setUploadingFile] = useState(false);
   const [fileIds, setFileIds] = useState<string[]>([]);
   const [searchInProgress, setSearchInProgress] = useState(false);
-  //const [formatPreference, setFormatPreference] = useState<'default' | 'bullets' | 'table' | 'preserve_tables'>('default');
+  const [formatPreference, setFormatPreference] = useState<'default' | 'bullets' | 'table' | 'preserve_tables'>('default');
   
   // Project Management States
   const [projects, setProjects] = useState<Project[]>([]);
@@ -1354,128 +1354,141 @@ const saveThreadToProjectWithId = async (newThreadId: string) => {
 
   // Send message function
   const sendMessage = async () => {
-  if (activeRun || !input.trim()) return;
-  setActiveRun(true);
-  setLoading(true);
-  
-  if (webSearchEnabled) setSearchInProgress(true);
-  
-  // Store the original user message (without search context)
-  const userMessage = {
-    role: "user",
-    content: input,
-    timestamp: new Date().toLocaleString(),
-    fileIds: fileIds.length > 0 ? [...fileIds] : undefined
-  };
-  setMessages((prev) => [...prev, userMessage]);
-  setInput("");
-  
-  // Show search indicator if web search is enabled
-  if (webSearchEnabled) {
-    setMessages(prev => [
-      ...prev,
-      {
-        role: "system",
-        content: `🔍 Searching the web for current information... ${SEARCH_FLAG}`,
-        timestamp: new Date().toLocaleString(),
-      }
-    ]);
-  } 
-
-  try {
-    setTyping(true);
-    const response = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: input,
-        originalMessage: input,
-        threadId: threadId,
-        webSearchEnabled: webSearchEnabled,
-        fileIds: fileIds.length > 0 ? fileIds : undefined
-      }),
-    });
-
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    if (activeRun || !input.trim()) return;
+    setActiveRun(true);
+    setLoading(true);
     
-    const responseText = await response.text();
-    let data;
+    if (webSearchEnabled) setSearchInProgress(true);
+    let enhancedInput = input;
+    
+    if (formatPreference !== 'default') {
+      const formatInstructions = {
+        bullets: '\n\n[Format: Please structure your response using bullet points where appropriate]',
+        table: '\n\n[Format: Please use tables to organize data when applicable]',
+        preserve_tables: '\n\n[IMPORTANT: If the previous response contained a table, please maintain a table structure and format. ]'
+      };
+    
+      enhancedInput = input + formatInstructions[formatPreference];
+    }
+    
+    // Store the original user message (without search context)
+    const userMessage = {
+      role: "user",
+      content: input, // Store original input, not enhanced
+      timestamp: new Date().toLocaleString(),
+      fileIds: fileIds.length > 0 ? [...fileIds] : undefined
+    };
+    setMessages((prev) => [...prev, userMessage]);
+    setInput("");
+    
+    // Show search indicator if web search is enabled
+    if (webSearchEnabled) {
+      setMessages(prev => [
+        ...prev,
+        {
+          role: "system",
+          content: `🔍 Searching the web for current information... ${SEARCH_FLAG}`,
+          timestamp: new Date().toLocaleString(),
+        }
+      ]);
+    } 
+
     try {
-      data = JSON.parse(responseText);
-      console.log("=== DEBUG FRONTEND ===");
-      console.log("API Response Data:", JSON.stringify(data, null, 2));
-      console.log("Files from API:", data.files);
-      console.log("=== END DEBUG ===");
-    } catch (parseError) {
-      console.error('Failed to parse JSON response:', responseText);
-      throw new Error('Invalid JSON response from server');
-    }
+      setTyping(true);
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: enhancedInput, // Send enhanced message to API
+          originalMessage: input, // Send original for storage
+          threadId: threadId,
+          webSearchEnabled: webSearchEnabled,
+          fileIds: fileIds.length > 0 ? fileIds : undefined
+        }),
+      });
 
-    if (data.error) throw new Error(data.error);
-
-    if (data.threadId && data.threadId !== threadId) {
-      setThreadId(data.threadId);
-      if (currentProject) {
-        saveThreadToProjectWithId(data.threadId);
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      
+      const responseText = await response.text();
+      let data;
+      try {
+        data = JSON.parse(responseText);
+          // DEBUG LOGGING - Correct placement
+        console.log("=== DEBUG FRONTEND ===");
+        console.log("API Response Data:", JSON.stringify(data, null, 2));
+        console.log("Files from API:", data.files);
+        console.log("=== END DEBUG ===");
+      } catch (parseError) {
+        console.error('Failed to parse JSON response:', responseText);
+        throw new Error('Invalid JSON response from server');
       }
-    }
 
-    // Remove search indicator
-    if (webSearchEnabled) {
-      setMessages(prev => prev.filter(msg =>
-        !(msg.role === "system" && typeof msg.content === 'string' && msg.content.includes(SEARCH_FLAG))
-      ));
-    }
 
-    if (fileIds.length > 0) {
-      setFileIds([]);
-      setUploadedFiles([]);
-    }
-    
-    // Clean the response to remove any search context that might have leaked through
-    let cleanReply = data.reply || "No response received";
-    
-    // Remove any search context markers that might appear
-    cleanReply = cleanReply.replace(/\[Current Web Information[^\]]*\]:\s*/gi, '');
-    cleanReply = cleanReply.replace(/Web Summary:\s*[^\n]*\n/gi, '');
-    cleanReply = cleanReply.replace(/Top Search Results:\s*\n[\s\S]*?Instructions:[^\n]*\n/gi, '');
-    cleanReply = cleanReply.replace(/Instructions: Please incorporate this current web information[^\n]*\n?/gi, '');
-    
-    setMessages((prev) => [
-      ...prev,
-      { 
-        role: "assistant", 
-        content: cleanReply,
-        files: data.files,
-        timestamp: new Date().toLocaleString() 
-      },
-    ]);
-  } catch (error: any) {
-    console.error("Error:", error);
+      if (data.error) throw new Error(data.error);
 
-    if (webSearchEnabled) {
-      setMessages(prev => prev.filter(msg =>
-        !(msg.role === "system" && typeof msg.content === 'string' && msg.content.includes(SEARCH_FLAG))
-      ));
+      if (data.threadId && data.threadId !== threadId) {
+        setThreadId(data.threadId);
+        if (currentProject) {
+          saveThreadToProjectWithId(data.threadId);
+        }
+      }
+
+      // Remove search indicator
+      if (webSearchEnabled) {
+        setMessages(prev => prev.filter(msg =>
+          !(msg.role === "system" && typeof msg.content === 'string' && msg.content.includes(SEARCH_FLAG))
+        ));
+      }
+
+      if (fileIds.length > 0) {
+        setFileIds([]);
+        setUploadedFiles([]);
+      }
+      
+      // Clean the response to remove any search context that might have leaked through
+      let cleanReply = data.reply || "No response received";
+      
+      // Remove any search context markers that might appear
+      cleanReply = cleanReply.replace(/\[Current Web Information[^\]]*\]:\s*/gi, '');
+      cleanReply = cleanReply.replace(/Web Summary:\s*[^\n]*\n/gi, '');
+      cleanReply = cleanReply.replace(/Top Search Results:\s*\n[\s\S]*?Instructions:[^\n]*\n/gi, '');
+      cleanReply = cleanReply.replace(/Instructions: Please incorporate this current web information[^\n]*\n?/gi, '');
+      
+      setMessages((prev) => [
+        ...prev,
+        { 
+          role: "assistant", 
+          content: cleanReply,
+          files: data.files, // Include any files returned by the API
+          timestamp: new Date().toLocaleString() 
+        },
+      ]);
+    } catch (error: any) {
+      console.error("Error:", error);
+
+      if (webSearchEnabled) {
+        setMessages(prev => prev.filter(msg =>
+          !(msg.role === "system" && typeof msg.content === 'string' && msg.content.includes(SEARCH_FLAG))
+        ));
+      }
+      
+      let errorMessage = "Unable to reach assistant.";
+      if (error.message) errorMessage = error.message;
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: `Error: ${errorMessage}`,
+          timestamp: new Date().toLocaleString(),
+        },
+      ]);
+    } finally {
+      setTyping(false);
+      setLoading(false);
+      setActiveRun(false);
+      setSearchInProgress(false);
     }
-    
-    let errorMessage = "Unable to reach assistant.";
-    if (error.message) errorMessage = error.message;
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "assistant",
-        content: `Error: ${errorMessage}`,
-        timestamp: new Date().toLocaleString(),
-      },
-    ]);
-  } finally {
-    setTyping(false);
-    setLoading(false);
-    setActiveRun(false);
-    setSearchInProgress(false);
-  }
-};
+  };
 
   // Utility functions
   const copyChatToClipboard = async () => {
@@ -1823,11 +1836,10 @@ const saveThreadToProjectWithId = async (newThreadId: string) => {
         </header>
 
         {/* Chat Container */}
-        {/* Chat Container - REPLACE the section starting around line 1200 */}
         <div className="flex-1 flex flex-col p-2 md:p-4 overflow-hidden">
           <div
             ref={chatContainerRef}
-            className="flex-1 overflow-y-auto overflow-x-hidden ring-1 ring-gray-200 shadow-sm rounded-2xl bg-white p-4 md:p-5 space-y-4 pb-28 chat-container"
+            className="flex-1 overflow-y-auto ring-1 ring-gray-200 shadow-sm rounded-2xl bg-white p-4 md:p-5 space-y-4 pb-28"
           >
             {messages.map((msg, index) => (
               <motion.div key={index}>
@@ -1846,154 +1858,150 @@ const saveThreadToProjectWithId = async (newThreadId: string) => {
                       : "bg-white text-black border"
                   }`}
                 >
-                  <div className="message-content chat-message">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        h1: ({ children, ...props }) => (
-                          <h1 className="text-xl md:text-2xl font-bold mt-4 md:mt-6 mb-3 md:mb-4 text-gray-900" {...props}>{children}</h1>
-                        ),
-                        h2: ({ children, ...props }) => (
-                          <h2 className="text-lg md:text-xl font-semibold mt-3 md:mt-5 mb-2 md:mb-3 text-gray-800" {...props}>{children}</h2>
-                        ),
-                        h3: ({ children, ...props }) => (
-                          <h3 className="text-base md:text-lg font-semibold mt-3 md:mt-4 mb-2 text-gray-800" {...props}>{children}</h3>
-                        ),
-                        p: ({ children, ...props }) => (
-                          <p className="mb-3 md:mb-4 leading-relaxed text-sm md:text-base text-gray-700" {...props}>{children}</p>
-                        ),
-                        a: ({ href, children, ...props }) => {
-                          const isCitation = href?.startsWith('http');
-                          return (
-                            <a 
-                              href={href} 
-                              target="_blank" 
-                              rel="noopener noreferrer"
-                              className={isCitation 
-                                ? "text-blue-600 hover:text-blue-800 underline decoration-1 hover:decoration-2 transition-colors"
-                                : "text-blue-600 hover:text-blue-800 underline"
-                              }
-                              {...props}
-                            >
-                              {children}
-                              {isCitation && <span className="text-xs ml-1">↗</span>}
-                            </a>
-                          );
-                        },
-                        code: ({ inline, className, children, ...props }: any) => {
-                          return !inline ? (
-                            <pre className="bg-gray-900 text-gray-100 rounded-lg p-3 md:p-4 overflow-x-auto mb-3 md:mb-4 text-xs md:text-sm">
-                              <code className={className} {...props}>
-                                {children}
-                              </code>
-                            </pre>
-                          ) : (
-                            <code className="bg-gray-100 text-red-600 px-1 py-0.5 rounded text-xs md:text-sm font-mono" {...props}>
-                              {children}
-                            </code>
-                          );
-                        },
-                        ul: ({ children, ...props }) => (
-                          <ul className="list-disc pl-5 md:pl-6 mb-3 md:mb-4 space-y-1 md:space-y-2 text-sm md:text-base" {...props}>{children}</ul>
-                        ),
-                        ol: ({ children, ...props }) => (
-                          <ol className="list-decimal pl-5 md:pl-6 mb-3 md:mb-4 space-y-1 md:space-y-2 text-sm md:text-base" {...props}>{children}</ol>
-                        ),
-                        li: ({ children, ...props }) => (
-                          <li className="text-gray-700 leading-relaxed text-sm md:text-base" {...props}>{children}</li>
-                        ),
-                        // UPDATED TABLE COMPONENTS - This is the main fix
-                        table: ({ children, ...props }) => (
-                          <div className="my-3 md:my-4 w-full">
-                            <div className="overflow-x-auto border border-gray-300 rounded-lg">
-                              <table className="min-w-full border-collapse text-xs sm:text-sm md:text-base" {...props}>
-                                {children}
-                              </table>
-                            </div>
-                          </div>
-                        ),
-                        thead: ({ children, ...props }) => (
-                          <thead className="bg-gray-100" {...props}>{children}</thead>
-                        ),
-                        tbody: ({ children, ...props }) => (
-                          <tbody {...props}>{children}</tbody>
-                        ),
-                        tr: ({ children, ...props }) => (
-                          <tr className="border-b border-gray-200 hover:bg-gray-50" {...props}>{children}</tr>
-                        ),
-                        th: ({ children, ...props }) => (
-                          <th className="border-r border-gray-300 px-2 sm:px-3 md:px-4 py-1 sm:py-2 md:py-3 text-left font-semibold text-gray-900 bg-gray-100 text-xs sm:text-sm md:text-base align-top whitespace-nowrap" {...props}>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    h1: ({ children, ...props }) => (
+                      <h1 className="text-xl md:text-2xl font-bold mt-4 md:mt-6 mb-3 md:mb-4 text-gray-900" {...props}>{children}</h1>
+                    ),
+                    h2: ({ children, ...props }) => (
+                      <h2 className="text-lg md:text-xl font-semibold mt-3 md:mt-5 mb-2 md:mb-3 text-gray-800" {...props}>{children}</h2>
+                    ),
+                    h3: ({ children, ...props }) => (
+                      <h3 className="text-base md:text-lg font-semibold mt-3 md:mt-4 mb-2 text-gray-800" {...props}>{children}</h3>
+                    ),
+                    p: ({ children, ...props }) => (
+                      <p className="mb-3 md:mb-4 leading-relaxed text-sm md:text-base text-gray-700" {...props}>{children}</p>
+                    ),
+                    a: ({ href, children, ...props }) => {
+                      const isCitation = href?.startsWith('http');
+                      return (
+                        <a 
+                          href={href} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className={isCitation 
+                            ? "text-blue-600 hover:text-blue-800 underline decoration-1 hover:decoration-2 transition-colors"
+                            : "text-blue-600 hover:text-blue-800 underline"
+                          }
+                          {...props}
+                        >
+                          {children}
+                          {isCitation && <span className="text-xs ml-1">↗</span>}
+                        </a>
+                      );
+                    },
+                    code: ({ inline, className, children, ...props }: any) => {
+                      return !inline ? (
+                        <pre className="bg-gray-900 text-gray-100 rounded-lg p-3 md:p-4 overflow-x-auto mb-3 md:mb-4 text-xs md:text-sm">
+                          <code className={className} {...props}>
                             {children}
-                          </th>
-                        ),
-                        td: ({ children, ...props }) => (
-                          <td className="border-r border-gray-300 px-2 sm:px-3 md:px-4 py-1 sm:py-2 md:py-3 text-gray-700 text-xs sm:text-sm md:text-base align-top" {...props}>
-                            <div className="max-w-[120px] sm:max-w-[200px] md:max-w-none break-words overflow-hidden">
-                              {children}
-                            </div>
-                          </td>
-                        ),
-                        blockquote: ({ children, ...props }) => (
-                          <blockquote className="border-l-4 border-gray-300 pl-3 md:pl-4 py-2 mb-3 md:mb-4 italic text-gray-600 text-sm md:text-base" {...props}>
-                            {children}
-                          </blockquote>
-                        ),
-                        img: ({ src, alt, ...props }) => {
-                          if (!src || src.trim() === '') {
-                            return <span className="text-gray-500 italic">[Image not available]</span>;
-                          }
-                          
-                          if (src.startsWith('/api/files/')) {
-                            return (
-                              <div className="my-2 p-2 border rounded bg-gray-50">
-                                <span className="text-sm text-gray-600">📎 {alt || 'Download File'}</span>
-                                <a 
-                                  href={src}
-                                  download
-                                  className="ml-2 text-blue-600 hover:text-blue-800 underline text-sm"
-                                >
-                                  Download
-                                </a>
-                              </div>
-                            );
-                          }
-                          
-                          return (
-                            <img 
-                              src={src} 
-                              alt={alt || ''} 
-                              className="max-w-full h-auto rounded border"
-                              onError={(e) => {
-                                e.currentTarget.style.display = 'none';
-                              }}
-                              {...props}
-                            />
-                          );
-                        },
-                        strong: ({ children, ...props }) => (
-                          <strong className="font-semibold text-gray-900" {...props}>{children}</strong>
-                        ),
-                      }}
-                    >
-                      {extractTextContent(msg.content)}
-                    </ReactMarkdown>
-                    {msg.files && msg.files.length > 0 && (
-                      <div className="mt-3">
-                        {msg.files.map((file, fileIndex) => {
-                          // Skip rendering FileRenderer if the file is already linked in the text content
-                          const isAlreadyLinkedInText = typeof msg.content === 'string' && 
-                            msg.content.includes(`/api/files/${file.file_id}`);
-                          
-                          // Only render FileRenderer for files not already embedded in text
-                          if (isAlreadyLinkedInText) {
-                            return null;
-                          }
-                          
-                          return <FileRenderer key={fileIndex} file={file} />;
-                        })}
+                          </code>
+                        </pre>
+                      ) : (
+                        <code className="bg-gray-100 text-red-600 px-1 py-0.5 rounded text-xs md:text-sm font-mono" {...props}>
+                          {children}
+                        </code>
+                      );
+                    },
+                    ul: ({ children, ...props }) => (
+                      <ul className="list-disc pl-5 md:pl-6 mb-3 md:mb-4 space-y-1 md:space-y-2 text-sm md:text-base" {...props}>{children}</ul>
+                    ),
+                    ol: ({ children, ...props }) => (
+                      <ol className="list-decimal pl-5 md:pl-6 mb-3 md:mb-4 space-y-1 md:space-y-2 text-sm md:text-base" {...props}>{children}</ol>
+                    ),
+                    li: ({ children, ...props }) => (
+                      <li className="text-gray-700 leading-relaxed text-sm md:text-base" {...props}>{children}</li>
+                    ),
+                    table: ({ children, ...props }) => (
+                      <div className="overflow-x-auto mb-3 md:mb-4">
+                        <table className="min-w-full border-collapse border border-gray-300 text-sm md:text-base" {...props}>
+                          {children}
+                        </table>
                       </div>
-                    )}
-                  </div>
+                    ),
+                    thead: ({ children, ...props }) => (
+                      <thead className="bg-gray-100" {...props}>{children}</thead>
+                    ),
+                    tbody: ({ children, ...props }) => (
+                      <tbody {...props}>{children}</tbody>
+                    ),
+                    tr: ({ children, ...props }) => (
+                      <tr className="border-b border-gray-200" {...props}>{children}</tr>
+                    ),
+                    th: ({ children, ...props }) => (
+                      <th className="border border-gray-300 px-3 md:px-4 py-2 md:py-3 text-left font-semibold text-gray-900 bg-gray-100 text-sm md:text-base align-top" {...props}>
+                        {children}
+                      </th>
+                    ),
+                    td: ({ children, ...props }) => (
+                      <td className="border border-gray-300 px-3 md:px-4 py-2 md:py-3 text-gray-700 text-sm md:text-base align-top" {...props}>
+                        {children}
+                      </td>
+                    ),
+                    blockquote: ({ children, ...props }) => (
+                      <blockquote className="border-l-4 border-gray-300 pl-3 md:pl-4 py-2 mb-3 md:mb-4 italic text-gray-600 text-sm md:text-base" {...props}>
+                        {children}
+                      </blockquote>
+                    ),
+                    
+                    img: ({ src, alt, ...props }) => {
+                      if (!src || src.trim() === '') {
+                        return <span className="text-gray-500 italic">[Image not available]</span>;
+                      }
+                      
+                      
+                      if (src.startsWith('/api/files/')) {
+                        return (
+                          <div className="my-2 p-2 border rounded bg-gray-50">
+                            <span className="text-sm text-gray-600">📎 {alt || 'Download File'}</span>
+                            <a 
+                              href={src}
+                              download
+                              className="ml-2 text-blue-600 hover:text-blue-800 underline text-sm"
+                            >
+                              Download
+                            </a>
+                          </div>
+                        );
+                      }
+                      
+                      
+                      return (
+                        <img 
+                          src={src} 
+                          alt={alt || ''} 
+                          className="max-w-full h-auto rounded border"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                          }}
+                          {...props}
+                        />
+                      );
+                    },
+                    strong: ({ children, ...props }) => (
+                      <strong className="font-semibold text-gray-900" {...props}>{children}</strong>
+                    ),
+                  }}
+                >
+                  {extractTextContent(msg.content)}
+                </ReactMarkdown>
+               {msg.files && msg.files.length > 0 && (
+                <div className="mt-3">
+                  {msg.files.map((file, fileIndex) => {
+                    // Skip rendering FileRenderer if the file is already linked in the text content
+                    const isAlreadyLinkedInText = typeof msg.content === 'string' && 
+                      msg.content.includes(`/api/files/${file.file_id}`);
+                    
+                    // Only render FileRenderer for files not already embedded in text
+                    if (isAlreadyLinkedInText) {
+                      return null;
+                    }
+                    
+                    return <FileRenderer key={fileIndex} file={file} />;
+                  })}
+                </div>
+              )}
                 </div>
               </motion.div>
             ))}
@@ -2011,8 +2019,6 @@ const saveThreadToProjectWithId = async (newThreadId: string) => {
             )}
           </div>
         </div>
-
-
 
         {/* Settings & Features Bar */}
         <div className="border-t bg-gray-50">
@@ -2041,6 +2047,21 @@ const saveThreadToProjectWithId = async (newThreadId: string) => {
                       )}
                     </span>
                   </label>
+
+                  {/* Format Options */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-600">Format:</span>
+                    <select
+                      value={formatPreference}
+                      onChange={(e) => setFormatPreference(e.target.value as 'default' | 'bullets' | 'table' | 'preserve_tables')}
+                      className="text-sm border rounded px-2 py-1"
+                    >
+                      <option value="default">Default</option>
+                      <option value="bullets">• Bullets</option>
+                      <option value="table">⊞ Tables</option>
+                      <option value="preserve_tables">📋 Keep Table Format</option>
+                    </select>
+                  </div>
 
                   {/* File Upload */}
                   <div className="flex items-center">
@@ -2114,7 +2135,6 @@ const saveThreadToProjectWithId = async (newThreadId: string) => {
             </div>
           )}
 
-
           {/* Mobile Layout */}
           {isMobile && (
             <div className="p-2">
@@ -2130,6 +2150,17 @@ const saveThreadToProjectWithId = async (newThreadId: string) => {
                 >
                   🔍 Search {webSearchEnabled && '✓'}
                 </button>
+                
+                <select
+                  value={formatPreference}
+                  onChange={(e) => setFormatPreference(e.target.value as 'default' | 'bullets' | 'table' | 'preserve_tables')}
+                  className="flex-1 py-2 px-3 rounded-lg text-sm border bg-white"
+                >
+                  <option value="default">Format: Default</option>
+                  <option value="bullets">Format: Bullets</option>
+                  <option value="table">Format: Tables</option>
+                  <option value="preserve_tables">Format: Keep Tables</option>
+                </select>
                 
                 <button
                   onClick={() => fileInputRef.current?.click()}
@@ -2161,7 +2192,6 @@ const saveThreadToProjectWithId = async (newThreadId: string) => {
               )}
             </div>
           )}
-
         </div>
 
         {/* Input & Controls */}

@@ -5,7 +5,7 @@
   --foreground: #171717;
 }
 
-@theme inline {
+:root {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
@@ -23,4 +23,64 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Chat container and message styling */
+.chat-container {
+  overflow-x: hidden;
+}
+
+.chat-message {
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+}
+
+.message-content {
+  overflow-x: visible;
+}
+
+/* Table responsive improvements */
+@media (max-width: 768px) {
+  .table-container {
+    font-size: 11px;
+  }
+  
+  .table-container table {
+    min-width: 300px;
+  }
+  
+  .table-container th,
+  .table-container td {
+    padding: 4px 6px !important;
+    font-size: 10px !important;
+    line-height: 1.2;
+  }
+  
+  /* Improved scrolling on mobile */
+  .table-container::-webkit-scrollbar {
+    height: 6px;
+  }
+  
+  .table-container::-webkit-scrollbar-thumb {
+    background-color: #cbd5e0;
+    border-radius: 3px;
+  }
+  
+  .table-container::-webkit-scrollbar-track {
+    background-color: #f7fafc;
+  }
+}
+
+/* Ensure tables don't break layout on smaller screens */
+@media (max-width: 480px) {
+  .table-container th,
+  .table-container td {
+    padding: 2px 4px !important;
+    font-size: 9px !important;
+  }
+  
+  .table-container table {
+    min-width: 250px;
+  }
 }
