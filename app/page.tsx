@@ -144,7 +144,9 @@ const ChatApp = () => {
 
 
   // new function to render different file types (odf, text, documents, spreadsheet and image file types)
-  const FileRenderer = ({ file }: { file: any }) => {
+// REPLACE your FileRenderer component with this improved version:
+
+const FileRenderer = ({ file }: { file: any }) => {
   const isImage = file.type === 'image' || file.type === 'image_url';
   const downloadUrl = file.file_id ? `/api/files/${file.file_id}` : file.url;
   const previewUrl = file.file_id ? `/api/files/${file.file_id}?preview=true` : file.url;
@@ -152,6 +154,52 @@ const ChatApp = () => {
   const getFileIcon = () => {
     if (isImage) return '🖼️';
     return '📎';
+  };
+
+  // Enhanced download handler for mobile compatibility
+  const handleDownload = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    
+    try {
+      // For mobile browsers, open in new tab instead of direct download
+      if (isMobile) {
+        window.open(downloadUrl, '_blank');
+        return;
+      }
+      
+      // For desktop, try programmatic download
+      const response = await fetch(downloadUrl);
+      if (!response.ok) {
+        throw new Error('Download failed');
+      }
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      
+      // Extract filename from response headers or use default
+      const contentDisposition = response.headers.get('content-disposition');
+      let filename = file.description || 'download';
+      
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+        if (filenameMatch) {
+          filename = filenameMatch[1].replace(/['"]/g, '');
+        }
+      }
+      
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      
+    } catch (error) {
+      console.error('Download failed:', error);
+      // Fallback: open in new tab
+      window.open(downloadUrl, '_blank');
+    }
   };
 
   return (
@@ -167,13 +215,12 @@ const ChatApp = () => {
               👁️ Preview
             </button>
           )}
-          <a 
-            href={downloadUrl}
-            download
+          <button
+            onClick={handleDownload}
             className="text-blue-600 text-sm px-2 py-1 border rounded hover:bg-blue-50"
           >
-            ⬇️ Download
-          </a>
+            ⬇️ {isMobile ? 'Open' : 'Download'}
+          </button>
         </div>
       </div>
       {isImage && (
