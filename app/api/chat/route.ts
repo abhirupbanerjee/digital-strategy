@@ -74,6 +74,46 @@ function extractTextFromOpenAIResponse(assistantMsg: any): string {
   }
 }
 
+// Helper function to parse JSON response from assistant
+function parseAssistantJsonResponse(responseText: string): any {
+  try {
+    // First try to parse directly
+    const parsed = JSON.parse(responseText);
+    return parsed;
+  } catch (error) {
+    // If direct parsing fails, try to extract JSON from markdown code blocks
+    const jsonMatch = responseText.match(/```json\s*([\s\S]*?)\s*```/);
+    if (jsonMatch) {
+      try {
+        return JSON.parse(jsonMatch[1]);
+      } catch (e) {
+        console.error('Failed to parse JSON from code block:', e);
+      }
+    }
+    
+    // If still failing, try to find JSON-like content
+    const jsonStart = responseText.indexOf('{');
+    const jsonEnd = responseText.lastIndexOf('}');
+    if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+      try {
+        return JSON.parse(responseText.substring(jsonStart, jsonEnd + 1));
+      } catch (e) {
+        console.error('Failed to parse extracted JSON:', e);
+      }
+    }
+    
+    // If all parsing fails, return the original text wrapped in a standard format
+    return {
+      content: responseText,
+      type: "text",
+      metadata: {
+        parsing_failed: true,
+        original_content: responseText
+      }
+    };
+  }
+}
+
 // Helper function to clean response from search artifacts
 function cleanResponseFromSearchArtifacts(response: string): string {
   let cleaned = response;
@@ -94,7 +134,7 @@ function cleanResponseFromSearchArtifacts(response: string): string {
 
 export async function POST(request: NextRequest) {
   try {
-    const { message, originalMessage, threadId, webSearchEnabled, fileIds, shareToken } = await request.json();
+    const { message, originalMessage, threadId, webSearchEnabled, fileIds, shareToken, useJsonFormat } = await request.json();
 
     // Validate share token if provided
     if (shareToken) {
@@ -230,13 +270,28 @@ export async function POST(request: NextRequest) {
             });
           }
           
-          enhancedMessage += '\n[END SEARCH CONTEXT]\n\nIMPORTANT: Please provide a natural response incorporating relevant information from the search results above. Cite sources naturally when using specific information, but do not mention the search context formatting. Focus on being helpful and accurate.';
+          enhancedMessage += '\n[END SEARCH CONTEXT]\n\n';
+          
+          // Add JSON formatting instruction if requested
+          if (useJsonFormat) {
+            enhancedMessage += 'IMPORTANT: Please provide a natural response incorporating relevant information from the search results above. Cite sources naturally when using specific information, but do not mention the search context formatting. Focus on being helpful and accurate. Format your response as a valid JSON object with the following structure:\n\n{\n  "content": "Your main response content here",\n  "sources": ["source1", "source2"],\n  "type": "response_with_search",\n  "metadata": {\n    "search_performed": true,\n    "sources_count": number_of_sources\n  }\n}\n\nDO NOT include any text outside this JSON structure.';
+          } else {
+            enhancedMessage += 'IMPORTANT: Please provide a natural response incorporating relevant information from the search results above. Cite sources naturally when using specific information, but do not mention the search context formatting. Focus on being helpful and accurate.';
+          }
+          
           console.log('Web search enhanced message created');
         }
       } catch (searchError: any) {
         console.error('Tavily search failed:', searchError.response?.data || searchError.message);
         enhancedMessage = `${message}\n\n[Note: Web search was requested but encountered an error. Responding based on available knowledge.]`;
+        
+        if (useJsonFormat) {
+          enhancedMessage += '\n\nPlease format your response as a valid JSON object with the following structure:\n\n{\n  "content": "Your response content here",\n  "type": "response_without_search",\n  "metadata": {\n    "search_performed": false,\n    "search_error": true\n  }\n}\n\nDO NOT include any text outside this JSON structure.';
+        }
       }
+    } else if (useJsonFormat) {
+      // Add JSON formatting instruction even without search
+      enhancedMessage = `${message}\n\nPlease format your response as a valid JSON object with the following structure:\n\n{\n  "content": "Your response content here",\n  "type": "standard_response",\n  "metadata": {\n    "search_performed": false\n  }\n}\n\nDO NOT include any text outside this JSON structure.`;
     }
     
     // Prepare message with attachments - use ORIGINAL message for thread storage
@@ -279,8 +334,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Now add the ENHANCED message for AI processing (this won't be stored permanently)
-    if (webSearchPerformed) {
-      console.log('Adding enhanced search context for AI processing...');
+    if (webSearchPerformed || useJsonFormat) {
+      console.log('Adding enhanced context for AI processing...');
       try {
         await axios.post(
           `https://api.openai.com/v1/threads/${currentThreadId}/messages`,
@@ -301,6 +356,11 @@ export async function POST(request: NextRequest) {
     const runConfig: any = {
       assistant_id: ASSISTANT_ID,
     };
+
+    // Add JSON format if requested
+    if (useJsonFormat) {
+      runConfig.response_format = { type: "json_object" };
+    }
 
     // Add tools configuration based on features enabled
     const tools = [];
@@ -385,6 +445,7 @@ export async function POST(request: NextRequest) {
     }
 
     let reply = 'No response received.';
+    let parsedResponse = null;
     
     if (status === 'completed') {
       console.log('Run completed, fetching messages...');
@@ -406,18 +467,12 @@ export async function POST(request: NextRequest) {
           
           // Clean up search artifacts from the response
           reply = cleanResponseFromSearchArtifacts(reply);
-        }
-        
-        // Append search sources if available (in a clean format)
-        if (webSearchEnabled && searchSources.length > 0) {
-          reply += '\n\n---\n**Sources:**\n';
-          searchSources.forEach((source, index) => {
-            reply += `${index + 1}. [${source.title}](${source.url})`;
-            if (source.score) {
-              reply += ` (${(source.score * 100).toFixed(0)}% relevance)`;
-            }
-            reply += '\n';
-          });
+          
+          // If JSON format was requested, try to parse the response
+          if (useJsonFormat) {
+            parsedResponse = parseAssistantJsonResponse(reply);
+            console.log('Parsed JSON response:', parsedResponse);
+          }
         }
         
         console.log('Reply extracted and cleaned successfully');
@@ -431,12 +486,41 @@ export async function POST(request: NextRequest) {
       reply = 'The assistant is taking too long to respond. Please try again.';
     }
 
-    return NextResponse.json({
+    // Prepare response object
+    const responseObj: any = {
       reply,
       threadId: currentThreadId,
       status: 'success',
-      webSearchPerformed
-    });
+      webSearchPerformed,
+      useJsonFormat: !!useJsonFormat
+    };
+
+    // Add parsed response if JSON format was used
+    if (useJsonFormat && parsedResponse) {
+      responseObj.parsedResponse = parsedResponse;
+    }
+
+    // Append search sources if available (in a clean format)
+    if (webSearchEnabled && searchSources.length > 0) {
+      if (useJsonFormat && parsedResponse && !parsedResponse.parsing_failed) {
+        // If we have a valid JSON response, sources are already included
+        responseObj.searchSources = searchSources;
+      } else {
+        // For non-JSON responses, append sources in markdown format
+        reply += '\n\n---\n**Sources:**\n';
+        searchSources.forEach((source, index) => {
+          reply += `${index + 1}. [${source.title}](${source.url})`;
+          if (source.score) {
+            reply += ` (${(source.score * 100).toFixed(0)}% relevance)`;
+          }
+          reply += '\n';
+        });
+        responseObj.reply = reply;
+        responseObj.searchSources = searchSources;
+      }
+    }
+
+    return NextResponse.json(responseObj);
 
   } catch (error: any) {
     console.error('API Error:', error.response?.data || error.message);
