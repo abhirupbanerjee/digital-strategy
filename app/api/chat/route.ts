@@ -14,63 +14,108 @@ const supabase = createClient(
 );
 
 // Helper function to extract text from OpenAI response (consistent with threads API)
-function extractTextFromOpenAIResponse(assistantMsg: any): string {
+// Enhanced extractTextFromOpenAIResponse function
+// Enhanced extractTextFromOpenAIResponse function
+function extractTextFromOpenAIResponse(assistantMsg: any): { type: string; content: string; files?: any[] } {
+  const files: any[] = [];
+  let textParts: string[] = [];
+
   try {
     if (!assistantMsg?.content) {
-      return 'No response received.';
+      return { type: 'text', content: 'No response received.' };
     }
 
-    // Handle array of content items (most common format)
+    // First, extract files from attachments (most reliable)
+    if (assistantMsg.attachments && Array.isArray(assistantMsg.attachments)) {
+      assistantMsg.attachments.forEach((attachment: any) => {
+        if (attachment.file_id) {
+          files.push({
+            type: 'file',
+            file_id: attachment.file_id,
+            description: 'Generated File'
+          });
+        }
+      });
+    }
+
     if (Array.isArray(assistantMsg.content)) {
-      const textParts: string[] = [];
-      
       for (const contentItem of assistantMsg.content) {
         if (contentItem.type === 'text') {
-          // Handle nested text structure
+          let textContent = '';
           if (contentItem.text && typeof contentItem.text === 'object' && contentItem.text.value) {
-            textParts.push(contentItem.text.value);
+            textContent = contentItem.text.value;
           } else if (typeof contentItem.text === 'string') {
-            textParts.push(contentItem.text);
+            textContent = contentItem.text;
           }
+          
+          // Extract file info from annotations and replace sandbox links
+          if (contentItem.text && contentItem.text.annotations) {
+            contentItem.text.annotations.forEach((annotation: any) => {
+              if (annotation.type === 'file_path' && annotation.file_path?.file_id) {
+                // Get description from the text around the annotation
+                const beforeText = textContent.substring(Math.max(0, annotation.start_index - 100), annotation.start_index);
+                const afterText = textContent.substring(annotation.end_index, annotation.end_index + 20);
+                
+                // Extract description from markdown link pattern [description](path)
+                const linkPattern = /\[([^\]]+)\]\([^)]+\)/;
+                const linkMatch = textContent.substring(annotation.start_index - 100, annotation.end_index + 20).match(linkPattern);
+                const description = linkMatch ? linkMatch[1] : 'Generated File';
+                
+                // Update existing file with better description or add new one
+                const existingFileIndex = files.findIndex(f => f.file_id === annotation.file_path.file_id);
+                if (existingFileIndex >= 0) {
+                  files[existingFileIndex].description = description;
+                } else {
+                  files.push({
+                    type: 'file',
+                    file_id: annotation.file_path.file_id,
+                    description: description
+                  });
+                }
+
+                // REPLACE SANDBOX LINK WITH PROPER DOWNLOAD LINK
+                const sandboxUrl = annotation.text; // e.g., "sandbox:/mnt/data/file.pdf"
+                const downloadUrl = `/api/files/${annotation.file_path.file_id}`;
+                
+                // Replace the sandbox URL in the text content
+                textContent = textContent.replace(sandboxUrl, downloadUrl);
+              }
+            });
+          }
+          
+          textParts.push(textContent);
         } else if (contentItem.type === 'image_file') {
-          textParts.push('[Image file generated]');
+          files.push({
+            type: 'image',
+            file_id: contentItem.image_file?.file_id,
+            description: 'Generated Image'
+          });
         } else if (contentItem.type === 'image_url') {
-          textParts.push('[Image URL generated]');
-        } else {
-          // Handle other content types (code interpreter results, etc.)
-          if (contentItem.text && typeof contentItem.text === 'string') {
-            textParts.push(contentItem.text);
-          } else if (typeof contentItem === 'string') {
-            textParts.push(contentItem);
-          }
+          files.push({
+            type: 'image_url',
+            url: contentItem.image_url?.url,
+            description: 'Generated Image'
+          });
         }
       }
       
-      return textParts.length > 0 ? textParts.join('\n\n') : 'No response received.';
+      return {
+        type: files.length > 0 ? 'mixed' : 'text',
+        content: textParts.length > 0 ? textParts.join('\n\n') : 'Response generated',
+        files: files.length > 0 ? files : undefined
+      };
     }
     
-    // Handle direct string content
+    // Handle other formats as before
     if (typeof assistantMsg.content === 'string') {
-      return assistantMsg.content;
+      return { type: 'text', content: assistantMsg.content };
     }
     
-    // Handle object with text property
-    if (typeof assistantMsg.content === 'object' && assistantMsg.content.text) {
-      if (typeof assistantMsg.content.text === 'string') {
-        return assistantMsg.content.text;
-      }
-      if (assistantMsg.content.text.value) {
-        return assistantMsg.content.text.value;
-      }
-    }
-    
-    // Fallback
-    console.warn('Unexpected assistant response structure:', assistantMsg.content);
-    return 'Response received but could not be processed properly.';
+    return { type: 'text', content: 'Response received but could not be processed properly.' };
     
   } catch (error) {
     console.error('Error extracting text from assistant response:', error);
-    return 'Error processing assistant response.';
+    return { type: 'text', content: 'Error processing assistant response.' };
   }
 }
 
@@ -446,7 +491,8 @@ export async function POST(request: NextRequest) {
 
     let reply = 'No response received.';
     let parsedResponse = null;
-    
+    let extractedResponse;
+
     if (status === 'completed') {
       console.log('Run completed, fetching messages...');
       try {
@@ -456,10 +502,15 @@ export async function POST(request: NextRequest) {
         );
         
         const assistantMsg = messagesRes.data.data.find((m: any) => m.role === 'assistant');
+        // Add this right after: const assistantMsg = messagesRes.data.data.find((m: any) => m.role === 'assistant');
+        console.log("=== FULL OPENAI MESSAGE STRUCTURE ===");
+        console.log("Full assistant message:", JSON.stringify(assistantMsg, null, 2));
+        console.log("=== END STRUCTURE ===");
         
         // Process the assistant's response using our extraction function
         if (assistantMsg?.content) {
-          reply = extractTextFromOpenAIResponse(assistantMsg);
+          extractedResponse = extractTextFromOpenAIResponse(assistantMsg);
+          reply = extractedResponse.content;
           
           // Clean up any remaining citation markers or artifacts
           reply = reply.replace(/【\d+:\d+†[^】]+】/g, '');
@@ -473,22 +524,28 @@ export async function POST(request: NextRequest) {
             parsedResponse = parseAssistantJsonResponse(reply);
             console.log('Parsed JSON response:', parsedResponse);
           }
+        } else {
+          extractedResponse = { type: 'text', content: reply };
         }
         
         console.log('Reply extracted and cleaned successfully');
       } catch (error: any) {
         console.error('Failed to fetch messages:', error.response?.data || error.message);
         reply = 'Failed to fetch response.';
+        extractedResponse = { type: 'text', content: reply };
       }
     } else if (status === 'failed') {
       reply = 'The assistant run failed. Please try again.';
+      extractedResponse = { type: 'text', content: reply };
     } else if (retries >= maxRetries) {
       reply = 'The assistant is taking too long to respond. Please try again.';
+      extractedResponse = { type: 'text', content: reply };
     }
 
-    // Prepare response object
+    // Now build the response object with the correct extracted data
     const responseObj: any = {
       reply,
+      files: extractedResponse?.files,
       threadId: currentThreadId,
       status: 'success',
       webSearchPerformed,
@@ -519,6 +576,12 @@ export async function POST(request: NextRequest) {
         responseObj.searchSources = searchSources;
       }
     }
+    // DEBUG LOGGING - Add this before return NextResponse.json(responseObj);
+      console.log("=== DEBUG API RESPONSE ===");
+      console.log("Reply:", reply);
+      console.log("ExtractedResponse:", JSON.stringify(extractedResponse, null, 2));
+      console.log("Final responseObj:", JSON.stringify(responseObj, null, 2));
+      console.log("=== END DEBUG ===");
 
     return NextResponse.json(responseObj);
 

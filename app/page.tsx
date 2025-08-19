@@ -9,7 +9,13 @@ import { useMemo } from "react";
 // Define types
 interface Message {
   role: string;
-  content: string | any; // Allow both string and object content
+  content: string | any;
+  files?: Array<{
+    type: string;
+    file_id?: string;
+    url?: string;
+    description: string;
+  }>;
   timestamp?: string;
   fileIds?: string[];
 }
@@ -135,6 +141,56 @@ const ChatApp = () => {
     () => new Set(currentProject?.threads ?? []),
     [currentProject]
   );
+
+
+  // new function to render different file types (odf, text, documents, spreadsheet and image file types)
+  const FileRenderer = ({ file }: { file: any }) => {
+  const isImage = file.type === 'image' || file.type === 'image_url';
+  const downloadUrl = file.file_id ? `/api/files/${file.file_id}` : file.url;
+  const previewUrl = file.file_id ? `/api/files/${file.file_id}?preview=true` : file.url;
+  
+  const getFileIcon = () => {
+    if (isImage) return '🖼️';
+    return '📎';
+  };
+
+  return (
+    <div className="border rounded-lg p-3 mb-2 bg-gray-50">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium">{getFileIcon()} {file.description}</span>
+        <div className="flex gap-2">
+          {isImage && (
+            <button 
+              onClick={() => window.open(previewUrl, '_blank')}
+              className="text-blue-600 text-sm px-2 py-1 border rounded hover:bg-blue-50"
+            >
+              👁️ Preview
+            </button>
+          )}
+          <a 
+            href={downloadUrl}
+            download
+            className="text-blue-600 text-sm px-2 py-1 border rounded hover:bg-blue-50"
+          >
+            ⬇️ Download
+          </a>
+        </div>
+      </div>
+      {isImage && (
+        <div className="mt-2">
+          <img 
+            src={previewUrl} 
+            alt={file.description}
+            className="max-w-full h-auto max-h-64 rounded border"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none';
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
+};
 
   // Thread Sync Function - NEW
   const syncProjectThreads = async (projectId: string, threadIds: string[]) => {
@@ -1309,7 +1365,7 @@ const saveThreadToProjectWithId = async (newThreadId: string) => {
       const formatInstructions = {
         bullets: '\n\n[Format: Please structure your response using bullet points where appropriate]',
         table: '\n\n[Format: Please use tables to organize data when applicable]',
-        preserve_tables: '\n\n[IMPORTANT: If the previous response contained a table, please maintain the EXACT same table structure and format. Add new information as additional rows or columns, but keep it in proper markdown table format with | separators |]'
+        preserve_tables: '\n\n[IMPORTANT: If the previous response contained a table, please maintain a table structure and format. ]'
       };
     
       enhancedInput = input + formatInstructions[formatPreference];
@@ -1352,14 +1408,21 @@ const saveThreadToProjectWithId = async (newThreadId: string) => {
       });
 
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      
       const responseText = await response.text();
       let data;
       try {
         data = JSON.parse(responseText);
+          // DEBUG LOGGING - Correct placement
+        console.log("=== DEBUG FRONTEND ===");
+        console.log("API Response Data:", JSON.stringify(data, null, 2));
+        console.log("Files from API:", data.files);
+        console.log("=== END DEBUG ===");
       } catch (parseError) {
         console.error('Failed to parse JSON response:', responseText);
         throw new Error('Invalid JSON response from server');
       }
+
 
       if (data.error) throw new Error(data.error);
 
@@ -1396,6 +1459,7 @@ const saveThreadToProjectWithId = async (newThreadId: string) => {
         { 
           role: "assistant", 
           content: cleanReply,
+          files: data.files, // Include any files returned by the API
           timestamp: new Date().toLocaleString() 
         },
       ]);
@@ -1880,13 +1944,64 @@ const saveThreadToProjectWithId = async (newThreadId: string) => {
                         {children}
                       </blockquote>
                     ),
+                    
+                    img: ({ src, alt, ...props }) => {
+                      if (!src || src.trim() === '') {
+                        return <span className="text-gray-500 italic">[Image not available]</span>;
+                      }
+                      
+                      
+                      if (src.startsWith('/api/files/')) {
+                        return (
+                          <div className="my-2 p-2 border rounded bg-gray-50">
+                            <span className="text-sm text-gray-600">📎 {alt || 'Download File'}</span>
+                            <a 
+                              href={src}
+                              download
+                              className="ml-2 text-blue-600 hover:text-blue-800 underline text-sm"
+                            >
+                              Download
+                            </a>
+                          </div>
+                        );
+                      }
+                      
+                      
+                      return (
+                        <img 
+                          src={src} 
+                          alt={alt || ''} 
+                          className="max-w-full h-auto rounded border"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                          }}
+                          {...props}
+                        />
+                      );
+                    },
                     strong: ({ children, ...props }) => (
                       <strong className="font-semibold text-gray-900" {...props}>{children}</strong>
                     ),
                   }}
                 >
                   {extractTextContent(msg.content)}
-                </ReactMarkdown>  
+                </ReactMarkdown>
+               {msg.files && msg.files.length > 0 && (
+                <div className="mt-3">
+                  {msg.files.map((file, fileIndex) => {
+                    // Skip rendering FileRenderer if the file is already linked in the text content
+                    const isAlreadyLinkedInText = typeof msg.content === 'string' && 
+                      msg.content.includes(`/api/files/${file.file_id}`);
+                    
+                    // Only render FileRenderer for files not already embedded in text
+                    if (isAlreadyLinkedInText) {
+                      return null;
+                    }
+                    
+                    return <FileRenderer key={fileIndex} file={file} />;
+                  })}
+                </div>
+              )}
                 </div>
               </motion.div>
             ))}
