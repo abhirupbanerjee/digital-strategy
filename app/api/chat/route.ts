@@ -339,7 +339,11 @@ export async function POST(request: NextRequest) {
       enhancedMessage = `${message}\n\nPlease format your response as a valid JSON object with the following structure:\n\n{\n  "content": "Your response content here",\n  "type": "standard_response",\n  "metadata": {\n    "search_performed": false\n  }\n}\n\nDO NOT include any text outside this JSON structure.`;
     }
     
-    // Prepare message with attachments - use ORIGINAL message for thread storage
+    // ========================================
+    // FIXED: Single message with proper file attachment
+    // ========================================
+    
+    // Prepare the SINGLE message for the thread with both content and files
     interface MessageForThread {
       role: string;
       content: any;
@@ -349,27 +353,32 @@ export async function POST(request: NextRequest) {
       }>;
     }
 
+    // Use enhanced message if web search was performed, otherwise use original
+    const messageContent = webSearchPerformed || useJsonFormat ? enhancedMessage : (originalMessage || message);
+
     const messageForThread: MessageForThread = {
       role: 'user',
-      content: originalMessage || message // Store original, clean message in thread
+      content: messageContent
     };
 
+    // CRITICAL: Attach files to the enhanced message, not just the original
     if (fileIds && fileIds.length > 0) {
       messageForThread.attachments = fileIds.map((fileId: string) => ({
         file_id: fileId,
         tools: [{ type: "file_search" }]
       }));
+      console.log('Files attached to message:', fileIds);
     }
 
-    // Add ORIGINAL message to thread (not enhanced)
-    console.log('Adding original message to thread...');
+    // Add the SINGLE message to thread (with both content and files)
+    console.log('Adding message to thread with files and enhanced content...');
     try {
       await axios.post(
         `https://api.openai.com/v1/threads/${currentThreadId}/messages`,
         messageForThread,
         { headers }
       );
-      console.log('Original message added to thread');
+      console.log('Message added to thread successfully');
     } catch (error: any) {
       console.error('Failed to add message:', error.response?.data || error.message);
       return NextResponse.json(
@@ -378,26 +387,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Now add the ENHANCED message for AI processing (this won't be stored permanently)
-    if (webSearchPerformed || useJsonFormat) {
-      console.log('Adding enhanced context for AI processing...');
-      try {
-        await axios.post(
-          `https://api.openai.com/v1/threads/${currentThreadId}/messages`,
-          {
-            role: 'user',
-            content: enhancedMessage
-          },
-          { headers }
-        );
-        console.log('Enhanced context added for AI processing');
-      } catch (error: any) {
-        console.error('Failed to add enhanced message:', error.response?.data || error.message);
-        // Continue anyway - we have the original message stored
-      }
-    }
-
-    // Configure run
+    // ========================================
+    // ENSURE file_search is ALWAYS enabled when files are present
+    // ========================================
+    
+    // Configure run - UPDATED
     const runConfig: any = {
       assistant_id: ASSISTANT_ID,
     };
@@ -407,24 +401,34 @@ export async function POST(request: NextRequest) {
       runConfig.response_format = { type: "json_object" };
     }
 
-    // Add tools configuration based on features enabled
+    // FIXED: Always include file_search when files are present
     const tools = [];
     
     // Always include code_interpreter for general functionality
     tools.push({ type: "code_interpreter" });
     
-    // Add file_search if files are uploaded or for better search integration
-    if ((fileIds && fileIds.length > 0) || webSearchEnabled) {
+    // CRITICAL: Always include file_search when files are uploaded
+    if (fileIds && fileIds.length > 0) {
+      tools.push({ type: "file_search" });
+      console.log('file_search tool enabled for file processing');
+    } else if (webSearchEnabled) {
+      // Include file_search for web search integration even without files
       tools.push({ type: "file_search" });
     }
 
-    // Add tools to run configuration if any are needed
-    if (tools.length > 0) {
-      runConfig.tools = tools;
-    }
+    // Add tools to run configuration
+    runConfig.tools = tools;
 
-    // Add any additional instructions for web search context
-    if (webSearchEnabled && searchSources.length > 0) {
+    // Enhanced instructions for file processing
+    if (fileIds && fileIds.length > 0) {
+      let instructions = "You have access to uploaded files. Please analyze the file content carefully and provide specific, detailed responses based on the actual content.";
+      
+      if (webSearchEnabled && searchSources.length > 0) {
+        instructions += " You also have access to current web search results. Combine information from both the uploaded files and web search when relevant.";
+      }
+      
+      runConfig.additional_instructions = instructions;
+    } else if (webSearchEnabled && searchSources.length > 0) {
       runConfig.additional_instructions = "You have access to current web search results. Use this information to provide accurate, up-to-date responses. When citing information from search results, reference sources naturally without exposing internal search formatting.";
     }
 
