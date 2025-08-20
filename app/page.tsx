@@ -130,6 +130,39 @@ const ChatApp = () => {
     });
   }, [messages]);
 
+  // Handle scroll to show/hide jump buttons
+    useEffect(() => {
+      const chatContainer = chatContainerRef.current;
+      if (!chatContainer) return;
+
+      const handleScroll = () => {
+        const { scrollTop, scrollHeight, clientHeight } = chatContainer;
+        const isNearTop = scrollTop < 200;
+        const isNearBottom = scrollTop + clientHeight > scrollHeight - 200;
+        
+        // Show jump buttons when not near top or bottom
+        setShowJumpButtons(!isNearTop || !isNearBottom);
+      };
+
+      chatContainer.addEventListener('scroll', handleScroll);
+      return () => chatContainer.removeEventListener('scroll', handleScroll);
+    }, []);
+
+    // Jump functions
+    const jumpToTop = () => {
+      chatContainerRef.current?.scrollTo({
+        top: 0,
+        behavior: "smooth",
+      });
+    };
+
+    const jumpToBottom = () => {
+      chatContainerRef.current?.scrollTo({
+        top: chatContainerRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    };
+
   // Load shares when modal opens
   useEffect(() => {
     if (currentProject && showShareModal) {
@@ -370,6 +403,9 @@ const FileRenderer = ({ file }: { file: any }) => {
     return content;
   };
 
+  // Jump button states
+  const [showJumpButtons, setShowJumpButtons] = useState(false);
+
   // Simple function to get or create "Default" project
 const getOrCreateDefaultProject = async (): Promise<Project | null> => {
   try {
@@ -574,64 +610,7 @@ const getOrCreateDefaultProject = async (): Promise<Project | null> => {
       {
         keywords: ['India', 'Republic of India', 'Bharat'],
         title: 'India'
-      },
-      {
-        keywords: ['strategy', 'strategic', 'planning', 'roadmap', 'vision'],
-        title: 'Strategic Planning Discussion'
-      },
-      {
-        keywords: ['digital', 'transformation', 'digitalization', 'modernization'],
-        title: 'Digital Transformation'
-      },
-      {
-        keywords: ['api', 'apis', 'integration', 'endpoint', 'rest', 'graphql'],
-        title: 'API Development'
-      },
-      {
-        keywords: ['database', 'sql', 'query', 'schema', 'migration'],
-        title: 'Database Design'
-      },
-      {
-        keywords: ['security', 'authentication', 'authorization', 'encryption', 'cybersecurity'],
-        title: 'Security Discussion'
-      },
-      {
-        keywords: ['ui', 'ux', 'design', 'interface', 'user experience', 'frontend'],
-        title: 'UI/UX Design'
-      },
-      {
-        keywords: ['performance', 'optimization', 'speed', 'efficiency', 'scalability'],
-        title: 'Performance Optimization'
-      },
-      {
-        keywords: ['testing', 'qa', 'quality assurance', 'unit test', 'integration test'],
-        title: 'Testing & QA'
-      },
-      {
-        keywords: ['deployment', 'devops', 'ci/cd', 'pipeline', 'infrastructure'],
-        title: 'DevOps & Deployment'
-      },
-      {
-        keywords: ['government', 'policy', 'regulation', 'compliance', 'public sector'],
-        title: 'Government Policy Discussion'
-      },
-      {
-        keywords: ['caribbean', 'regional', 'island', 'tourism', 'development'],
-        title: 'Caribbean Development'
-      },
-      {
-        keywords: ['budget', 'cost', 'pricing', 'financial', 'economics'],
-        title: 'Budget Planning'
-      },
-      {
-        keywords: ['project', 'management', 'timeline', 'milestone', 'deadline'],
-        title: 'Project Management'
-      },
-      {
-        keywords: ['research', 'analysis', 'study', 'investigation', 'report'],
-        title: 'Research & Analysis'
       }
-
     ];
 
     // Check for topic patterns
@@ -654,9 +633,41 @@ const getOrCreateDefaultProject = async (): Promise<Project | null> => {
 const cleanSearchArtifactsFromContent = (text: string): string => {
 
   console.log('=== FRONTEND CLEANUP DEBUG ===');
-
+    console.log('Cleanup function called with text:', text.substring(0, 100));
+  
+  if (text.includes('/api/files/')) {
+    console.log('Found file links, skipping cleanup');
+    return text;
+  }
+  console.log('Processing text length:', text.length);
+  console.log('Text preview:', text.substring(0, 200));
+  
+  // Check for file download links
+  const hasFileLinks = text.includes('/api/files/');
+  console.log('Contains file links:', hasFileLinks);
+  
+  if (hasFileLinks) {
+    console.log('SKIPPING cleanup for message with file links');
+    const fileLinks = text.match(/\/api\/files\/[a-zA-Z0-9-_]+/g);
+    console.log('File links found:', fileLinks);
+    return text;
+  }
+  
+  console.log('Proceeding with cleanup (no file links)');
+  
   let cleaned = text;
- 
+  
+  // Rest of cleanup logic...
+  cleaned = cleaned.replace(/\[Current Web Information[^\]]*\]:\s*/gi, '');
+  cleaned = cleaned.replace(/Web Summary:\s*[^\n]*\n/gi, '');
+  cleaned = cleaned.replace(/Top Search Results:\s*\n[\s\S]*?Instructions:[^\n]*\n/gi, '');
+  cleaned = cleaned.replace(/Instructions: Please incorporate this current web information[^\n]*\n?/gi, '');
+  cleaned = cleaned.replace(/\[Note: Web search was requested[^\]]*\]/gi, '');
+  cleaned = cleaned.replace(/\d+\.\s+\[PDF\]\s+[^\n]*\n\s*[^\n]*\.\.\.\s*Source:\s*https?:\/\/[^\s]+\s*/gi, '');
+  cleaned = cleaned.replace(/\d+\.\s+[^.]+\.\.\.\s*Source:\s*https?:\/\/[^\s]+\s*/gi, '');
+  cleaned = cleaned.replace(/^\s*---\s*\n/gm, '');
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+  cleaned = cleaned.replace(/^\s+|\s+$/g, '');
   
   console.log('Cleanup completed, removed', text.length - cleaned.length, 'characters');
   console.log('=== END FRONTEND CLEANUP ===');
@@ -831,9 +842,13 @@ const cleanSearchArtifactsFromContent = (text: string): string => {
       alert('Failed to load project. Check console for details.');
     }
   };
-
+  // Function to Auto-hide on Project Selection, Auto-hide on Thread Selection and Auto-hide on New Chat
   const selectProject = (project: Project) => {
     loadProject(project.id);
+    // Auto-hide panel on mobile and Desktop after selecting project
+    //if (isMobile) {
+      setShowProjectPanel(false);
+    //}
   };
 
   // Updated loadThread function with better debugging
@@ -882,6 +897,10 @@ const cleanSearchArtifactsFromContent = (text: string): string => {
     } catch (error) {
       console.error("Load Thread Error:", error);
       alert(`Failed to load thread: ${error}`);
+    }
+    // Auto-hide panel on mobile after loading thread
+    if (isMobile) {
+      setShowProjectPanel(false);
     }
   };
 
@@ -1488,7 +1507,8 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
   }
 };
 
-  // Utility functions
+  
+// Utility functions
   const copyChatToClipboard = async () => {
     const chatText = messages
       .map((msg) => `${msg.timestamp} - ${msg.role === "user" ? "You" : msg.role === "system" ? "System" : "Digital Strategy Bot"}:\n${msg.content}`)
@@ -1512,6 +1532,7 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
   const startNewChat = () => {
     clearChat();
     setShowProjectPanel(false);
+
   };
 
   // One-time cleanup function for existing threads
@@ -1812,12 +1833,13 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
 
             {/* Center: Title block - Fixed positioning */}
             <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2">
-              <img src="/icon.png" alt="Icon" className="h-8 w-8 md:h-10 md:w-10" />
-              <h2 className="text-lg md:text-xl font-semibold tracking-tight text-gray-900">
-                Digital Strategy Bot
+              {!isMobile && <img src="/icon.png" alt="Icon" className="h-8 w-8 md:h-10 md:w-10" />}
+              <h2 className={`font-semibold tracking-tight text-gray-900 ${isMobile ? 'text-base' : 'text-lg md:text-xl'}`}>
+                {isMobile ? 'Digital Strategy Bot' : 'Digital Strategy Bot'}
               </h2>
             </div>
-            
+
+
             {/* Right: Optional status */}
             <div className="flex items-center gap-2">
               {!isMobile && currentProject && (
@@ -2031,6 +2053,25 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
               </div>
             )}
           </div>
+          {/* Jump to Top/Bottom Buttons */}
+            {showJumpButtons && messages.length > 5 && (
+              <div className="absolute right-4 bottom-20 flex flex-col gap-2 z-30">
+                <button
+                  onClick={jumpToTop}
+                  className="w-10 h-10 bg-blue-500 hover:bg-blue-600 text-white rounded-full shadow-lg flex items-center justify-center transition-all duration-200 opacity-80 hover:opacity-100"
+                  title="Jump to top"
+                >
+                  ↑
+                </button>
+                <button
+                  onClick={jumpToBottom}
+                  className="w-10 h-10 bg-blue-500 hover:bg-blue-600 text-white rounded-full shadow-lg flex items-center justify-center transition-all duration-200 opacity-80 hover:opacity-100"
+                  title="Jump to bottom"
+                >
+                  ↓
+                </button>
+              </div>
+            )}
         </div>
 
         {/* Settings & Features Bar */}
@@ -2052,7 +2093,7 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
                       {searchInProgress ? (
                         <span className="animate-pulse">🔍</span>
                       ) : (
-                        <span>🔍</span>
+                        <span>🌐</span>
                       )}
                       Web Search
                       {webSearchEnabled && (
@@ -2062,33 +2103,35 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
                   </label>
 
                   {/* File Upload */}
-                  <div className="flex items-center">
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      multiple
-                      onChange={handleFileUpload}
-                      className="hidden"
-                      accept=".txt,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.json,.xml,.html,.md,.jpg,.jpeg,.png,.gif,.webp,.bmp,.tiff"
-                    />
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={uploadingFile}
-                      className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700 disabled:opacity-50"
-                    >
-                      {uploadingFile ? (
-                        <>
-                          <span className="animate-spin">⟳</span>
-                          Uploading...
-                        </>
-                      ) : (
-                        <>
-                          📎 Attach Files
-                          <span className="text-xs text-gray-500">(PDF, DOC, PPT, Excel, CSV, Images - Max 20MB)</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
+                  {!isMobile && (
+                    <div className="flex items-center">
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        multiple
+                        onChange={handleFileUpload}
+                        className="hidden"
+                        accept=".txt,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.json,.xml,.html,.md,.jpg,.jpeg,.png,.gif,.webp,.bmp,.tiff"
+                      />
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={uploadingFile}
+                        className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700 disabled:opacity-50"
+                      >
+                        {uploadingFile ? (
+                          <>
+                            <span className="animate-spin">⟳</span>
+                            Uploading...
+                          </>
+                        ) : (
+                          <>
+                            📎 Attach Files
+                            <span className="text-xs text-gray-500">(PDF, DOC, PPT, Excel, CSV, Images - Max 20MB)</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Status Indicators */}
@@ -2158,16 +2201,9 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
                       : 'bg-gray-200 text-gray-700'
                   }`}
                 >
-                  🔍 Search {webSearchEnabled && '✓'}
+                  🌐 Web Search {webSearchEnabled && '✓'}
                 </button>
-                
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploadingFile}
-                  className="p-2 rounded-lg bg-gray-200 text-gray-700"
-                >
-                  📎
-                </button>
+
               </div>
 
               {/* Mobile Files Display - Enhanced */}
@@ -2214,14 +2250,25 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
         <div className="p-3 md:p-4 bg-white/90 backdrop-blur border-t border-gray-200 z-40">
           <div className="flex flex-col gap-2">
             {/* Input Row */}
-            <div className="flex items-center gap-2">
-              <input
-                className="flex-1 rounded-xl ring-1 ring-gray-100 px-3 py-2 text-sm md:text-base focus:outline-none focus:ring-2 focus:ring-blue-500"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendMessage()}
-                placeholder="Type a message..."
-              />
+            <div className="flex items-end gap-2">
+                <textarea
+                  className="flex-1 rounded-xl ring-1 ring-gray-100 px-3 py-2 text-sm md:text-base focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none min-h-[40px] max-h-[120px] overflow-y-auto"
+                  value={input}
+                  onChange={(e) => {
+                    setInput(e.target.value);
+                    // Auto-resize textarea
+                    e.target.style.height = 'auto';
+                    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      sendMessage();
+                    }
+                  }}
+                  placeholder="Type a message... (Shift+Enter for new line)"
+                  rows={1}
+                />
               <button
                 className={`px-4 py-2 rounded-lg font-medium transition-colors ${
                   loading 
@@ -2249,12 +2296,7 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
                   >
                     📋 Copy Last Response
                   </button>
-                  <button
-                    className="flex-1 py-2 px-3 bg-purple-500 hover:bg-purple-600 text-white rounded-lg text-sm font-medium transition-colors"
-                    onClick={copyEmbeddedContent}
-                  >
-                    📊 Copy Content
-                  </button>
+
                   <button
                     className="flex-1 py-2 px-3 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg text-sm font-medium transition-colors"
                     onClick={copyChatToClipboard}
@@ -2275,23 +2317,13 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
                       {threads.find(t => t.id === threadId) ? '✅ Saved' : '💾 Save'}
                     </button>
                   )}
-                  <button
-                     className="flex-1 py-2 px-3 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm"
-                    onClick={clearChat}
-                  >
-                    🗒️ Clear Chat
-                  </button>
+
                 </>
               )}
               
               {isMobile && (
                 <div className="flex gap-2 w-full">
-                  <button
-                    className="flex-1 py-2 px-3 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm"
-                    onClick={clearChat}
-                  >
-                    🗒️ Clear
-                  </button>
+
                   {renderMobileSaveButton()}
                 </div>
               )}

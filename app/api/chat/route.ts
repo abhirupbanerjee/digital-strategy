@@ -752,7 +752,7 @@ export async function POST(request: NextRequest) {
     // Poll for completion
     let status = 'in_progress';
     let retries = 0;
-    const maxRetries = 25;
+    const maxRetries = 60;  // 60 seconds max wait time
 
     while ((status === 'in_progress' || status === 'queued') && retries < maxRetries) {
       await new Promise(resolve => setTimeout(resolve, 1000));
