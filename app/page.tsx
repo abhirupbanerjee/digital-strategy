@@ -1953,35 +1953,27 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
                         ),
                         // UPDATED TABLE COMPONENTS - This is the main fix
                         table: ({ children, ...props }) => (
-                          <div className="my-3 md:my-4 w-full">
-                            <div className="overflow-x-auto border border-gray-300 rounded-lg">
-                              <table className="min-w-full border-collapse text-xs sm:text-sm md:text-base" {...props}>
-                                {children}
-                              </table>
-                            </div>
+                          <div className="my-4 w-full overflow-x-auto border border-gray-300 rounded-lg bg-white">
+                            <table className="w-full md:w-full border-collapse text-xs md:text-sm" style={{ minWidth: '500px' }} {...props}>
+                              {children}
+                            </table>
                           </div>
                         ),
-                        thead: ({ children, ...props }) => (
-                          <thead className="bg-gray-100" {...props}>{children}</thead>
-                        ),
-                        tbody: ({ children, ...props }) => (
-                          <tbody {...props}>{children}</tbody>
-                        ),
-                        tr: ({ children, ...props }) => (
-                          <tr className="border-b border-gray-200 hover:bg-gray-50" {...props}>{children}</tr>
-                        ),
+
                         th: ({ children, ...props }) => (
-                          <th className="border-r border-gray-300 px-2 sm:px-3 md:px-4 py-1 sm:py-2 md:py-3 text-left font-semibold text-gray-900 bg-gray-100 text-xs sm:text-sm md:text-base align-top whitespace-nowrap" {...props}>
+                          <th className="border-r border-gray-300 px-2 md:px-4 py-1 md:py-3 text-left font-semibold text-gray-900 bg-gray-100 align-top whitespace-nowrap" {...props}>
                             {children}
                           </th>
                         ),
+
                         td: ({ children, ...props }) => (
-                          <td className="border-r border-gray-300 px-2 sm:px-3 md:px-4 py-1 sm:py-2 md:py-3 text-gray-700 text-xs sm:text-sm md:text-base align-top" {...props}>
-                            <div className="max-w-[120px] sm:max-w-[200px] md:max-w-none break-words overflow-hidden">
+                          <td className="border-r border-gray-300 px-2 md:px-4 py-1 md:py-3 text-gray-700 align-top" {...props}>
+                            <div className="break-words">
                               {children}
                             </div>
                           </td>
                         ),
+                        
                         blockquote: ({ children, ...props }) => (
                           <blockquote className="border-l-4 border-gray-300 pl-3 md:pl-4 py-2 mb-3 md:mb-4 italic text-gray-600 text-sm md:text-base" {...props}>
                             {children}

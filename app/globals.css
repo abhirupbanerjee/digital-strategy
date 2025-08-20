@@ -40,47 +40,64 @@ body {
   overflow-x: visible;
 }
 
-/* Table responsive improvements */
+/* Improved table styling - REPLACE the existing table CSS with this */
+.message-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  background: white;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.message-content table th,
+.message-content table td {
+  padding: 8px 12px;
+  border-right: 1px solid #d1d5db;
+  border-bottom: 1px solid #e5e7eb;
+  text-align: left;
+  vertical-align: top;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.message-content table th {
+  background-color: #f9fafb;
+  font-weight: 600;
+  color: #374151;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+/* Mobile responsive - less aggressive */
 @media (max-width: 768px) {
-  .table-container {
-    font-size: 11px;
+  .message-content table {
+    font-size: 12px;
   }
   
-  .table-container table {
-    min-width: 300px;
+  .message-content table th,
+  .message-content table td {
+    padding: 6px 8px;
+    font-size: 12px;
+    line-height: 1.3;
   }
   
-  .table-container th,
-  .table-container td {
-    padding: 4px 6px !important;
-    font-size: 10px !important;
-    line-height: 1.2;
-  }
-  
-  /* Improved scrolling on mobile */
-  .table-container::-webkit-scrollbar {
-    height: 6px;
-  }
-  
-  .table-container::-webkit-scrollbar-thumb {
-    background-color: #cbd5e0;
-    border-radius: 3px;
-  }
-  
-  .table-container::-webkit-scrollbar-track {
-    background-color: #f7fafc;
+  /* Better horizontal scrolling */
+  .message-content table {
+    min-width: 600px; /* Ensure table doesn't shrink too much */
   }
 }
 
-/* Ensure tables don't break layout on smaller screens */
 @media (max-width: 480px) {
-  .table-container th,
-  .table-container td {
-    padding: 2px 4px !important;
-    font-size: 9px !important;
+  .message-content table th,
+  .message-content table td {
+    padding: 4px 6px;
+    font-size: 11px;
   }
   
-  .table-container table {
-    min-width: 250px;
+  .message-content table {
+    min-width: 500px;
   }
 }
