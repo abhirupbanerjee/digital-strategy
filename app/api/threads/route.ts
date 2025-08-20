@@ -1,6 +1,4 @@
 // app/api/threads/route.ts
-// Updated to match your actual database schema
-
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
@@ -9,61 +7,87 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY!
 );
 
-// Helper function to remove search artifacts from message content
-function cleanSearchArtifacts(text: string): string {
+// Enhanced cleanup function that handles OpenAI's annotation format
+function safeCleanWithPlaceholders(text: string): string {
   if (typeof text !== 'string') return text;
   
-  let cleaned = text;
+  // Step 1: Replace all file references with placeholders
+  const fileLinksMap = new Map();
+  let placeholderCounter = 0;
+  let working = text;
   
-  // Remove the complete search context blocks
-  cleaned = cleaned.replace(
-    /\[INTERNAL SEARCH CONTEXT[^\]]*\]:[^]*?\[END SEARCH CONTEXT\]/gi, 
-    ''
-  );
+  // Extended patterns to catch all file reference formats
+  const patterns = [
+    /\[([^\]]+)\]\(\/api\/files\/([a-zA-Z0-9-_]+)\)/g,     // Markdown links
+    /\/api\/files\/[a-zA-Z0-9-_]+/g,                         // Plain URLs
+    /"\/api\/files\/[a-zA-Z0-9-_]+"/g,                       // Quoted URLs
+    /sandbox:\/\/[^\/]+\/[^\s\)]+/g,                         // OpenAI sandbox URLs
+    /\[([^\]]+)\]\(sandbox:\/\/[^\)]+\)/g,                   // Markdown sandbox links
+    /file-[a-zA-Z0-9]{24,}/g,                                // OpenAI file IDs
+  ];
   
-  // Remove any remaining IMPORTANT instructions
-  cleaned = cleaned.replace(
-    /IMPORTANT:\s*Please provide a natural response[^\n]*\n?/gi, 
-    ''
-  );
+  patterns.forEach(pattern => {
+    working = working.replace(pattern, (match) => {
+      const placeholder = `__FILE_PLACEHOLDER_${placeholderCounter++}__`;
+      fileLinksMap.set(placeholder, match);
+      return placeholder;
+    });
+  });
   
-  // Clean up extra whitespace and newlines
-  cleaned = cleaned.replace(/\n{3,}/g, '\n\n'); // Collapse multiple newlines
-  cleaned = cleaned.trim(); // Remove leading/trailing whitespace
+  // Step 2: Clean everything else aggressively
+  working = working.replace(/\[INTERNAL SEARCH CONTEXT[^\]]*\]:[^]*?\[END SEARCH CONTEXT\]/gi, '');
+  working = working.replace(/\[Current Web Information[^\]]*\]:\s*/gi, '');
+  working = working.replace(/Web Summary:\s*[^\n]*\n/gi, '');
+  working = working.replace(/Top Search Results:\s*\n[\s\S]*?Instructions:[^\n]*\n/gi, '');
+  working = working.replace(/\d+\.\s+\[PDF\]\s+[^\n]*\n\s*[^\n]*\.\.\.\s*Source:\s*https?:\/\/[^\s]+\s*/gi, '');
+  working = working.replace(/\d+\.\s+[^.]+\.\.\.\s*Source:\s*https?:\/\/[^\s]+\s*/gi, '');
+  working = working.replace(/Instructions: Please incorporate[^\n]*\n?/gi, '');
+  working = working.replace(/IMPORTANT:\s*Please provide[^\n]*\n?/gi, '');
+  working = working.replace(/\[Note: Web search was requested[^\]]*\]/gi, '');
+  working = working.replace(/Search performed on:\s*[^\n]*\n/gi, '');
+  working = working.replace(/Query:\s*"[^"]*"\s*/gi, '');
+  working = working.replace(/^\s*---\s*$/gm, '');
+  working = working.replace(/\n{3,}/g, '\n\n');
+  working = working.trim();
   
-  return cleaned;
+  // Step 3: Restore all file references
+  fileLinksMap.forEach((original, placeholder) => {
+    working = working.replace(placeholder, original);
+  });
+  
+  return working;
 }
 
-// Helper function to clean search artifacts from stored content - may remove as this is deleted
-function cleanSearchArtifactsFromContent(text: string): string {
-  if (typeof text !== 'string') return text;
+// Helper to process OpenAI message content and handle annotations
+function processOpenAIContent(content: any[]): string {
+  let processedText = '';
   
-  let cleaned = text;
+  for (const item of content) {
+    if (item.type === 'text') {
+      let text = item.text?.value || '';
+      
+      // Check for annotations (file references)
+      if (item.text?.annotations && Array.isArray(item.text.annotations)) {
+        for (const annotation of item.text.annotations) {
+          if (annotation.type === 'file_path' && annotation.file_path?.file_id) {
+            const fileId = annotation.file_path.file_id;
+            const sandboxUrl = annotation.text;
+            const downloadUrl = `/api/files/${fileId}`;
+            text = text.replace(sandboxUrl, downloadUrl);
+          }
+        }
+      }
+      
+      processedText += text;
+    } else if (item.type === 'image_file' && item.image_file?.file_id) {
+      const fileId = item.image_file.file_id;
+      processedText += `\n[Image: /api/files/${fileId}]\n`;
+    }
+  }
   
-  // Remove old-style search context markers
-  cleaned = cleaned.replace(/\[Current Web Information[^\]]*\]:\s*/gi, '');
-  cleaned = cleaned.replace(/Web Summary:\s*[^\n]*\n/gi, '');
-  cleaned = cleaned.replace(/Top Search Results:\s*\n[\s\S]*?Instructions:[^\n]*\n/gi, '');
-  cleaned = cleaned.replace(/Instructions: Please incorporate this current web information[^\n]*\n?/gi, '');
-  cleaned = cleaned.replace(/\[Note: Web search was requested[^\]]*\]/gi, '');
-  
-  // Remove detailed search result patterns
-  cleaned = cleaned.replace(/\d+\.\s+\[PDF\]\s+[^\n]*\n\s*[^\n]*\.\.\.\s*Source:\s*https?:\/\/[^\s]+\s*/gi, '');
-  cleaned = cleaned.replace(/\d+\.\s+[^.]+\.\.\.\s*Source:\s*https?:\/\/[^\s]+\s*/gi, '');
-  
-  // Remove search metadata
-  cleaned = cleaned.replace(/Search performed on:\s*[^\n]*\n/gi, '');
-  cleaned = cleaned.replace(/Query:\s*"[^"]*"\s*/gi, '');
-  
-  // Clean up formatting artifacts
-  cleaned = cleaned.replace(/^\s*---\s*\n/gm, '');
-  cleaned = cleaned.replace(/\n{3,}/g, '\n\n'); // Collapse multiple newlines
-  cleaned = cleaned.replace(/^\s+|\s+$/g, ''); // Trim whitespace
-  
-  return cleaned;
+  return processedText;
 }
 
-// Updated GET function in app/api/threads/route.ts
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -72,8 +96,6 @@ export async function GET(request: NextRequest) {
     if (!threadId) {
       return NextResponse.json({ error: 'Thread ID is required' }, { status: 400 });
     }
-
-    console.log('Fetching thread:', threadId);
 
     try {
       const OpenAI = (await import('openai')).default;
@@ -84,18 +106,32 @@ export async function GET(request: NextRequest) {
       // Get messages from OpenAI
       const messages = await openai.beta.threads.messages.list(threadId);
       
-      // Convert OpenAI messages to our format AND clean search artifacts
+      // Convert OpenAI messages to our format with proper file handling
       const formattedMessages = messages.data
         .reverse() // OpenAI returns newest first, we want oldest first
-        .map(msg => ({
-          role: msg.role,
-          content: msg.content[0]?.type === 'text' 
-            ? cleanSearchArtifacts(msg.content[0].text.value) // Clean artifacts here
-            : JSON.stringify(msg.content),
-          timestamp: new Date(msg.created_at * 1000).toLocaleString()
-        }));
-
-      console.log(`Thread fetched and cleaned successfully with ${formattedMessages.length} messages`);
+        .map((msg: any) => {
+          let content = '';
+          
+          // Handle different content types
+          if (Array.isArray(msg.content)) {
+            content = processOpenAIContent(msg.content);
+          } else if (msg.content && typeof msg.content === 'object') {
+            // Handle single content item or other structures
+            content = JSON.stringify(msg.content);
+          } else {
+            // Fallback for any other format
+            content = String(msg.content || '');
+          }
+          
+          // Clean the content while preserving file links
+          const cleanedContent = safeCleanWithPlaceholders(content);
+          
+          return {
+            role: msg.role,
+            content: cleanedContent,
+            timestamp: new Date(msg.created_at * 1000).toLocaleString()
+          };
+        });
 
       return NextResponse.json({
         threadId: threadId,
@@ -141,8 +177,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Thread ID is required' }, { status: 400 });
     }
 
-    console.log('Saving thread:', id);
-
     // Calculate message count
     const messageCount = Array.isArray(messages) ? messages.length : 0;
 
@@ -163,8 +197,6 @@ export async function POST(request: NextRequest) {
       console.error('Supabase upsert error:', error);
       return NextResponse.json({ error: 'Failed to save thread' }, { status: 500 });
     }
-
-    console.log('Thread saved successfully');
 
     return NextResponse.json({
       id: data.id,

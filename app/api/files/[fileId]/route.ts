@@ -1,5 +1,11 @@
 // app/api/files/[fileId]/route.ts
 import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_KEY!
+);
 
 export async function GET(
   request: NextRequest,
@@ -13,6 +19,67 @@ export async function GET(
     
     console.log(`Fetching file: ${fileId}`);
     
+    // STEP 1: Check Vercel Blob first (priority)
+    console.log('Checking Vercel Blob for file...');
+    try {
+      const { data: blobFile, error: blobError } = await supabase
+        .from('blob_files')
+        .select('vercel_blob_url, filename, content_type, file_size')
+        .eq('openai_file_id', fileId)
+        .single();
+      
+      if (!blobError && blobFile) {
+        console.log(`File found in Vercel Blob: ${blobFile.vercel_blob_url}`);
+        
+        // Update access timestamp for cleanup prioritization
+        await supabase
+          .from('blob_files')
+          .update({ accessed_at: new Date().toISOString() })
+          .eq('openai_file_id', fileId);
+        
+        // Fetch file from Vercel Blob
+        const blobResponse = await fetch(blobFile.vercel_blob_url);
+        
+        if (blobResponse.ok) {
+          const fileBuffer = await blobResponse.arrayBuffer();
+          
+          console.log(`Serving file from Vercel Blob: ${blobFile.filename}`);
+          
+          // Enhanced headers for mobile compatibility
+          const headers = new Headers({
+            'Content-Type': blobFile.content_type || 'application/octet-stream',
+            'Content-Length': fileBuffer.byteLength.toString(),
+            'Cache-Control': 'public, max-age=31536000',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET',
+            'Access-Control-Allow-Headers': 'Content-Type',
+          });
+
+          // For downloads (not preview), add download headers
+          if (!preview) {
+            headers.set('Content-Disposition', `attachment; filename="${blobFile.filename}"`);
+            headers.set('X-Content-Type-Options', 'nosniff');
+          } else {
+            // For preview, use inline disposition
+            headers.set('Content-Disposition', `inline; filename="${blobFile.filename}"`);
+          }
+
+          return new NextResponse(fileBuffer, { headers });
+        } else {
+          console.warn(`Failed to fetch from Vercel Blob: ${blobResponse.status}`);
+          // Continue to fallback
+        }
+      } else {
+        console.log('File not found in Vercel Blob, trying OpenAI fallback...');
+      }
+    } catch (blobError) {
+      console.warn('Error checking Vercel Blob:', blobError);
+      // Continue to fallback
+    }
+    
+    // STEP 2: Fallback to OpenAI (original logic)
+    console.log('Attempting OpenAI fallback...');
+    
     // First, get file metadata from OpenAI to determine the correct filename and type
     let fileMetadata = null;
     try {
@@ -25,10 +92,10 @@ export async function GET(
       
       if (metadataResponse.ok) {
         fileMetadata = await metadataResponse.json();
-        console.log('File metadata:', fileMetadata);
+        console.log('OpenAI file metadata:', fileMetadata);
       }
     } catch (metaError) {
-      console.warn('Could not fetch file metadata:', metaError);
+      console.warn('Could not fetch OpenAI file metadata:', metaError);
     }
     
     // Fetch file content from OpenAI
@@ -41,6 +108,19 @@ export async function GET(
 
     if (!response.ok) {
       console.error(`OpenAI file fetch failed: ${response.status} ${response.statusText}`);
+      
+      // STEP 3: File not found anywhere - return user-friendly message
+      if (response.status === 404 || response.status === 410) {
+        return NextResponse.json(
+          { 
+            error: 'File no longer available',
+            message: 'This file has expired or been removed. OpenAI files are only available for 48 hours after generation.',
+            fileId: fileId
+          },
+          { status: 404 }
+        );
+      }
+      
       return NextResponse.json(
         { error: 'File not found' },
         { status: 404 }
@@ -66,7 +146,7 @@ export async function GET(
       filename = `file-${fileId}${getFileExtension(contentType)}`;
     }
     
-    console.log(`Serving file: ${filename}, Content-Type: ${contentType}`);
+    console.log(`Serving file from OpenAI fallback: ${filename}, Content-Type: ${contentType}`);
     
     // Enhanced headers for mobile compatibility
     const headers = new Headers({
@@ -90,10 +170,17 @@ export async function GET(
 
     return new NextResponse(fileBuffer, { headers });
     
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('File download error:', error);
+    
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+    
     return NextResponse.json(
-      { error: 'Failed to download file' },
+      { 
+        error: 'Failed to download file',
+        message: 'There was an error retrieving the file. It may have expired or been removed.',
+        details: process.env.NODE_ENV === 'development' ? errorMessage : undefined
+      },
       { status: 500 }
     );
   }

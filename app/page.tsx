@@ -156,50 +156,21 @@ const FileRenderer = ({ file }: { file: any }) => {
     return '📎';
   };
 
-  // Enhanced download handler for mobile compatibility
-  const handleDownload = async (e: React.MouseEvent) => {
+  // Enhanced download handler for mobile and desktop compatibility
+  const handleDownload = (e: React.MouseEvent) => {
     e.preventDefault();
     
-    try {
-      // For mobile browsers, open in new tab instead of direct download
-      if (isMobile) {
-        window.open(downloadUrl, '_blank');
-        return;
-      }
-      
-      // For desktop, try programmatic download
-      const response = await fetch(downloadUrl);
-      if (!response.ok) {
-        throw new Error('Download failed');
-      }
-      
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      
-      // Extract filename from response headers or use default
-      const contentDisposition = response.headers.get('content-disposition');
-      let filename = file.description || 'download';
-      
-      if (contentDisposition) {
-        const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
-        if (filenameMatch) {
-          filename = filenameMatch[1].replace(/['"]/g, '');
-        }
-      }
-      
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-      
-    } catch (error) {
-      console.error('Download failed:', error);
-      // Fallback: open in new tab
-      window.open(downloadUrl, '_blank');
-    }
+    // Force download by opening in new window with download attribute
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = file.description || 'download';
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    
+    // Add to DOM, click, and remove
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   return (
@@ -680,27 +651,18 @@ const getOrCreateDefaultProject = async (): Promise<Project | null> => {
   };
 
   // Helper function to clean search artifacts from stored content
-  const cleanSearchArtifactsFromContent = (text: string): string => {
-    let cleaned = text;
-    
-    // Remove old-style search context markers
-    cleaned = cleaned.replace(/\[Current Web Information[^\]]*\]:\s*/gi, '');
-    cleaned = cleaned.replace(/Web Summary:\s*[^\n]*\n/gi, '');
-    cleaned = cleaned.replace(/Top Search Results:\s*\n[\s\S]*?Instructions:[^\n]*\n/gi, '');
-    cleaned = cleaned.replace(/Instructions: Please incorporate this current web information[^\n]*\n?/gi, '');
-    cleaned = cleaned.replace(/\[Note: Web search was requested[^\]]*\]/gi, '');
-    
-    // Remove search result patterns
-    cleaned = cleaned.replace(/\d+\.\s+\[PDF\]\s+[^\n]*\n\s*[^\n]*\.\.\.\s*Source:\s*https?:\/\/[^\s]+\s*/gi, '');
-    cleaned = cleaned.replace(/\d+\.\s+[^.]+\.\.\.\s*Source:\s*https?:\/\/[^\s]+\s*/gi, '');
-    
-    // Clean up common search instruction patterns
-    cleaned = cleaned.replace(/^\s*---\s*\n/gm, '');
-    cleaned = cleaned.replace(/\n{3,}/g, '\n\n'); // Collapse multiple newlines
-    cleaned = cleaned.replace(/^\s+|\s+$/g, ''); // Trim whitespace
-    
-    return cleaned;
-  };
+const cleanSearchArtifactsFromContent = (text: string): string => {
+
+  console.log('=== FRONTEND CLEANUP DEBUG ===');
+
+  let cleaned = text;
+ 
+  
+  console.log('Cleanup completed, removed', text.length - cleaned.length, 'characters');
+  console.log('=== END FRONTEND CLEANUP ===');
+  
+  return cleaned;
+};
 
   const randomColor = () => `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0')}`;
   const SEARCH_FLAG = '___WEB_SEARCH_IN_PROGRESS___';
@@ -1913,6 +1875,24 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
                         ),
                         a: ({ href, children, ...props }) => {
                           const isCitation = href?.startsWith('http');
+                          const isFileDownload = href?.startsWith('/api/files/');
+                          
+                          if (isFileDownload) {
+                            // Force external link behavior for file downloads
+                            return (
+                              <a 
+                                href={href}
+                                download
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-600 hover:text-blue-800 underline"
+                                {...props}
+                              >
+                                {children}
+                              </a>
+                            );
+                          }
+                          
                           return (
                             <a 
                               href={href} 

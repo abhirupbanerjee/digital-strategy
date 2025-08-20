@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
+import { put } from '@vercel/blob';
 
 const ASSISTANT_ID = process.env.OPENAI_ASSISTANT_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -13,11 +14,214 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY!
 );
 
-// Helper function to extract text from OpenAI response (consistent with threads API)
-// Enhanced extractTextFromOpenAIResponse function
-// Enhanced extractTextFromOpenAIResponse function
-function extractTextFromOpenAIResponse(assistantMsg: any): { type: string; content: string; files?: any[] } {
+// Helper function to upload OpenAI file to Vercel Blob
+async function uploadFileToVercelBlob(fileId: string, description: string): Promise<{
+  blobUrl: string;
+  fileKey: string;
+  fileSize: number;
+  contentType: string;
+  actualFilename: string;
+} | null> {
+  try {
+    console.log(`Uploading file ${fileId} to Vercel Blob...`);
+    
+    // First get file metadata from OpenAI
+    const metadataResponse = await fetch(`https://api.openai.com/v1/files/${fileId}`, {
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'OpenAI-Organization': OPENAI_ORGANIZATION || '',
+      },
+    });
+    
+    let actualFilename = description + '.docx'; // Default fallback
+    let contentType = 'application/octet-stream';
+    
+    if (metadataResponse.ok) {
+      const metadata = await metadataResponse.json();
+      if (metadata.filename) {
+        // Extract just the filename from the full path
+        actualFilename = metadata.filename.split('/').pop() || metadata.filename;
+        contentType = getContentTypeFromFilename(actualFilename);
+        console.log(`OpenAI metadata - Original: ${metadata.filename}, Extracted: ${actualFilename}`);
+      }
+    } else {
+      console.log(`Failed to get metadata for ${fileId}, using fallback filename: ${actualFilename}`);
+    }
+    
+    // Download file content from OpenAI
+    const fileResponse = await fetch(`https://api.openai.com/v1/files/${fileId}/content`, {
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'OpenAI-Organization': OPENAI_ORGANIZATION || '',
+      },
+    });
+    
+    if (!fileResponse.ok) {
+      console.error(`Failed to download file ${fileId} from OpenAI`);
+      return null;
+    }
+    
+    const fileBuffer = await fileResponse.arrayBuffer();
+    const fileSize = fileBuffer.byteLength;
+    
+    // Generate unique filename for blob storage but preserve extension
+    const timestamp = Date.now();
+    const fileKey = `generated/${timestamp}-${actualFilename}`;
+    
+    // Upload to Vercel Blob
+    const blob = await put(fileKey, fileBuffer, {
+      access: 'public',
+      contentType: contentType,
+      token: process.env.VERCEL_BLOB_READ_WRITE_TOKEN,
+    });
+    
+    console.log(`File ${fileId} uploaded to Vercel Blob: ${blob.url}`);
+    
+    return {
+      blobUrl: blob.url,
+      fileKey: fileKey,
+      fileSize: fileSize,
+      contentType: contentType,
+      actualFilename: actualFilename
+    };
+    
+  } catch (error) {
+    console.error(`Error uploading file ${fileId} to Vercel Blob:`, error);
+    return null;
+  }
+}
+
+// Helper function to store file mapping in Supabase
+async function storeFileMappingInSupabase(
+  openaiFileId: string,
+  blobUrl: string,
+  fileKey: string,
+  filename: string,
+  contentType: string,
+  fileSize: number,
+  threadId: string
+): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('blob_files')
+      .insert({
+        openai_file_id: openaiFileId,
+        vercel_blob_url: blobUrl,
+        vercel_file_key: fileKey,
+        filename: filename,
+        content_type: contentType,
+        file_size: fileSize,
+        thread_id: threadId,
+        created_at: new Date().toISOString(),
+        accessed_at: new Date().toISOString()
+      });
+    
+    if (error) {
+      console.error('Error storing file mapping in Supabase:', error);
+      return false;
+    }
+    
+    // Update storage metrics
+    await updateStorageMetrics(fileSize);
+    
+    console.log(`File mapping stored for ${openaiFileId}`);
+    return true;
+    
+  } catch (error) {
+    console.error('Error in storeFileMappingInSupabase:', error);
+    return false;
+  }
+}
+
+// Helper function to update storage metrics
+async function updateStorageMetrics(addedSize: number): Promise<void> {
+  try {
+    // Get current metrics
+    const { data: currentMetrics } = await supabase
+      .from('storage_metrics')
+      .select('total_size_bytes, file_count')
+      .single();
+    
+    const newTotalSize = (currentMetrics?.total_size_bytes || 0) + addedSize;
+    const newFileCount = (currentMetrics?.file_count || 0) + 1;
+    
+    // Update or insert metrics
+    const { error } = await supabase
+      .from('storage_metrics')
+      .upsert({
+        id: '00000000-0000-0000-0000-000000000000', // Fixed UUID for singleton row
+        total_size_bytes: newTotalSize,
+        file_count: newFileCount,
+        updated_at: new Date().toISOString()
+      });
+    
+    if (error) {
+      console.error('Error updating storage metrics:', error);
+    }
+    
+    // Check if cleanup is needed (400MB threshold)
+    const CLEANUP_THRESHOLD = 400 * 1024 * 1024; // 400MB
+    if (newTotalSize > CLEANUP_THRESHOLD) {
+      console.log(`Storage threshold exceeded (${newTotalSize} bytes), triggering cleanup...`);
+      // Trigger cleanup (will be implemented in storage endpoints)
+      await triggerStorageCleanup();
+    }
+    
+  } catch (error) {
+    console.error('Error in updateStorageMetrics:', error);
+  }
+}
+
+// Helper function to trigger storage cleanup
+async function triggerStorageCleanup(): Promise<void> {
+  try {
+    // Call cleanup endpoint (will be created in next step)
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+    await fetch(`${baseUrl}/api/vercel-storage/cleanup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    console.error('Error triggering storage cleanup:', error);
+  }
+}
+
+// Helper function to get content type from filename
+function getContentTypeFromFilename(filename: string): string {
+  const extension = filename.toLowerCase().split('.').pop();
+  
+  const contentTypes: { [key: string]: string } = {
+    'pdf': 'application/pdf',
+    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'doc': 'application/msword',
+    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'xls': 'application/vnd.ms-excel',
+    'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'ppt': 'application/vnd.ms-powerpoint',
+    'txt': 'text/plain',
+    'csv': 'text/csv',
+    'json': 'application/json',
+    'xml': 'application/xml',
+    'html': 'text/html',
+    'md': 'text/markdown',
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'png': 'image/png',
+    'gif': 'image/gif',
+    'svg': 'image/svg+xml',
+    'webp': 'image/webp',
+  };
+  
+  return extension ? contentTypes[extension] || 'application/octet-stream' : 'application/octet-stream';
+}
+
+// Enhanced extractTextFromOpenAI response with Vercel Blob integration
+async function extractTextFromOpenAIResponse(
+  assistantMsg: any, 
+  threadId: string
+): Promise<{ type: string; content: string; files?: any[] }> {
   const files: any[] = [];
+  const processedFileIds = new Set<string>(); // Track processed files to avoid duplicates
   let textParts: string[] = [];
 
   try {
@@ -27,15 +231,44 @@ function extractTextFromOpenAIResponse(assistantMsg: any): { type: string; conte
 
     // First, extract files from attachments (most reliable)
     if (assistantMsg.attachments && Array.isArray(assistantMsg.attachments)) {
-      assistantMsg.attachments.forEach((attachment: any) => {
-        if (attachment.file_id) {
-          files.push({
-            type: 'file',
-            file_id: attachment.file_id,
-            description: 'Generated File'
-          });
+      for (const attachment of assistantMsg.attachments) {
+        if (attachment.file_id && !processedFileIds.has(attachment.file_id)) {
+          processedFileIds.add(attachment.file_id);
+          
+          // CRITICAL: Upload to Vercel Blob immediately
+          const blobResult = await uploadFileToVercelBlob(
+            attachment.file_id, 
+            'Generated File'
+          );
+          
+          if (blobResult) {
+            // Store mapping in Supabase
+            await storeFileMappingInSupabase(
+              attachment.file_id,
+              blobResult.blobUrl,
+              blobResult.fileKey,
+              blobResult.actualFilename, // Use actual filename instead of description
+              blobResult.contentType,
+              blobResult.fileSize,
+              threadId
+            );
+            
+            files.push({
+              type: 'file',
+              file_id: attachment.file_id,
+              description: 'Generated File',
+              blob_url: blobResult.blobUrl // Add blob URL for immediate use
+            });
+          } else {
+            // Fallback to original OpenAI file
+            files.push({
+              type: 'file',
+              file_id: attachment.file_id,
+              description: 'Generated File'
+            });
+          }
         }
-      });
+      }
     }
 
     if (Array.isArray(assistantMsg.content)) {
@@ -50,46 +283,111 @@ function extractTextFromOpenAIResponse(assistantMsg: any): { type: string; conte
           
           // Extract file info from annotations and replace sandbox links
           if (contentItem.text && contentItem.text.annotations) {
-            contentItem.text.annotations.forEach((annotation: any) => {
+            for (const annotation of contentItem.text.annotations) {
               if (annotation.type === 'file_path' && annotation.file_path?.file_id) {
-                // Get description from the text around the annotation
-                const beforeText = textContent.substring(Math.max(0, annotation.start_index - 100), annotation.start_index);
-                const afterText = textContent.substring(annotation.end_index, annotation.end_index + 20);
+                const fileId = annotation.file_path.file_id;
                 
-                // Extract description from markdown link pattern [description](path)
+                // Skip if we've already processed this file
+                if (processedFileIds.has(fileId)) {
+                  const existingFileIndex = files.findIndex(f => f.file_id === fileId);
+                  if (existingFileIndex >= 0) {
+                    // Update description if we have a better one
+                    const linkPattern = /\[([^\]]+)\]\([^)]+\)/;
+                    const linkMatch = textContent.substring(annotation.start_index - 100, annotation.end_index + 20).match(linkPattern);
+                    const description = linkMatch ? linkMatch[1] : files[existingFileIndex].description;
+                    files[existingFileIndex].description = description;
+                  }
+                  
+                  // Still replace the sandbox URL in text
+                  const sandboxUrl = annotation.text;
+                  const downloadUrl = `/api/files/${fileId}`;
+                  textContent = textContent.replace(sandboxUrl, downloadUrl);
+                  continue;
+                }
+                
+                processedFileIds.add(fileId);
+                
+                // Get description from the text around the annotation
                 const linkPattern = /\[([^\]]+)\]\([^)]+\)/;
                 const linkMatch = textContent.substring(annotation.start_index - 100, annotation.end_index + 20).match(linkPattern);
                 const description = linkMatch ? linkMatch[1] : 'Generated File';
                 
-                // Update existing file with better description or add new one
-                const existingFileIndex = files.findIndex(f => f.file_id === annotation.file_path.file_id);
-                if (existingFileIndex >= 0) {
-                  files[existingFileIndex].description = description;
-                } else {
+                // CRITICAL: Upload to Vercel Blob immediately
+                const blobResult = await uploadFileToVercelBlob(
+                  fileId, 
+                  description
+                );
+                
+                let downloadUrl = `/api/files/${fileId}`;
+                
+                if (blobResult) {
+                  // Store mapping in Supabase
+                  await storeFileMappingInSupabase(
+                    fileId,
+                    blobResult.blobUrl,
+                    blobResult.fileKey,
+                    blobResult.actualFilename, // Use actual filename
+                    blobResult.contentType,
+                    blobResult.fileSize,
+                    threadId
+                  );
+                  
                   files.push({
                     type: 'file',
-                    file_id: annotation.file_path.file_id,
+                    file_id: fileId,
+                    description: description,
+                    blob_url: blobResult.blobUrl
+                  });
+                } else {
+                  // Fallback to original OpenAI file
+                  files.push({
+                    type: 'file',
+                    file_id: fileId,
                     description: description
                   });
                 }
 
                 // REPLACE SANDBOX LINK WITH PROPER DOWNLOAD LINK
-                const sandboxUrl = annotation.text; // e.g., "sandbox:/mnt/data/file.pdf"
-                const downloadUrl = `/api/files/${annotation.file_path.file_id}`;
-                
-                // Replace the sandbox URL in the text content
+                const sandboxUrl = annotation.text;
                 textContent = textContent.replace(sandboxUrl, downloadUrl);
               }
-            });
+            }
           }
           
           textParts.push(textContent);
         } else if (contentItem.type === 'image_file') {
-          files.push({
-            type: 'image',
-            file_id: contentItem.image_file?.file_id,
-            description: 'Generated Image'
-          });
+          // Handle image files similarly
+          const imageFileId = contentItem.image_file?.file_id;
+          if (imageFileId && !processedFileIds.has(imageFileId)) {
+            processedFileIds.add(imageFileId);
+            
+            const blobResult = await uploadFileToVercelBlob(imageFileId, 'Generated Image');
+            
+            if (blobResult) {
+              await storeFileMappingInSupabase(
+                imageFileId,
+                blobResult.blobUrl,
+                blobResult.fileKey,
+                blobResult.actualFilename, // Use actual filename
+                blobResult.contentType,
+                blobResult.fileSize,
+                threadId
+              );
+              
+              files.push({
+                type: 'image',
+                file_id: imageFileId,
+                description: 'Generated Image',
+                blob_url: blobResult.blobUrl
+              });
+            } else {
+              files.push({
+                type: 'image',
+                file_id: imageFileId,
+                description: 'Generated Image'
+              });
+            }
+          }
         } else if (contentItem.type === 'image_url') {
           files.push({
             type: 'image_url',
@@ -454,7 +752,7 @@ export async function POST(request: NextRequest) {
     // Poll for completion
     let status = 'in_progress';
     let retries = 0;
-    const maxRetries = 60;
+    const maxRetries = 25;
 
     while ((status === 'in_progress' || status === 'queued') && retries < maxRetries) {
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -506,14 +804,12 @@ export async function POST(request: NextRequest) {
         );
         
         const assistantMsg = messagesRes.data.data.find((m: any) => m.role === 'assistant');
-        // Add this right after: const assistantMsg = messagesRes.data.data.find((m: any) => m.role === 'assistant');
-        console.log("=== FULL OPENAI MESSAGE STRUCTURE ===");
-        console.log("Full assistant message:", JSON.stringify(assistantMsg, null, 2));
-        console.log("=== END STRUCTURE ===");
+
         
         // Process the assistant's response using our extraction function
         if (assistantMsg?.content) {
-          extractedResponse = extractTextFromOpenAIResponse(assistantMsg);
+          // CRITICAL: Pass threadId for Vercel Blob integration
+          extractedResponse = await extractTextFromOpenAIResponse(assistantMsg, currentThreadId);
           reply = extractedResponse.content;
           
           // Clean up any remaining citation markers or artifacts
@@ -580,12 +876,7 @@ export async function POST(request: NextRequest) {
         responseObj.searchSources = searchSources;
       }
     }
-    // DEBUG LOGGING - Add this before return NextResponse.json(responseObj);
-      console.log("=== DEBUG API RESPONSE ===");
-      console.log("Reply:", reply);
-      console.log("ExtractedResponse:", JSON.stringify(extractedResponse, null, 2));
-      console.log("Final responseObj:", JSON.stringify(responseObj, null, 2));
-      console.log("=== END DEBUG ===");
+
 
     return NextResponse.json(responseObj);
 
