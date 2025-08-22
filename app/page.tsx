@@ -1,99 +1,86 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+// app/page.tsx - Refactored to ~150 lines
+import React, { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import remarkGfm from "remark-gfm";
-import { useMemo } from "react";
 
-// Define types
-interface Message {
-  role: string;
-  content: string | any;
-  files?: Array<{
-    type: string;
-    file_id?: string;
-    url?: string;
-    description: string;
-  }>;
-  timestamp?: string;
-  fileIds?: string[];
-}
-  
-interface Project {
-  id: string;
-  name: string;
-  description?: string;
-  createdAt: string;
-  threads: string[];
-  color?: string;
-}
+// Types
+import { Message } from '../types/entities.types';
 
-interface Thread {
-  id: string;
-  projectId?: string;
-  title: string;
-  lastMessage?: string;
-  createdAt: string;
-}
+// Hooks
+import { useProjects } from '../hooks/useProjects';
+import { useThreads } from '../hooks/useThreads';
+import { useChat } from '../hooks/useChat';
+import { useWebSearch } from '../hooks/useWebSearch';
+import { useAutoSave } from '../hooks/useAutoSave';
 
-interface ShareLink {
-  id: string;
-  share_token: string;
-  permissions: 'read' | 'collaborate';
-  expires_at: string;
-  created_at: string;
-  shareUrl: string;
-}
+// Components
+import { ProjectSidebar } from '../components/sidebar/ProjectSidebar';
+import { MessageList } from '../components/chat/MessageList';
+import { ChatInput } from '../components/chat/ChatInput';
+import { WebSearchToggle } from '../components/chat/WebSearchToggle';
+import { NewProjectModal } from '../components/modals/NewProjectModal';
+import ThreadShareModal from "./components/ThreadShareModal";
 
+// Utils
+import { formatErrorMessage } from '../utils/errorHandler';
+import { ProjectService } from '../services/projectService';
 
-
-const ChatApp = () => {
-  // Main States
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState("");
-  const [sidebarOpen, setSidebarOpen] = useState(true); // Fixed: Proper sidebar state
-  
-  const [threadId, setThreadId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [activeRun, setActiveRun] = useState(false);
-  const [typing, setTyping] = useState(false);
-  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
-  const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
-  const [uploadingFile, setUploadingFile] = useState(false);
-  const [fileIds, setFileIds] = useState<string[]>([]);
-  const [searchInProgress, setSearchInProgress] = useState(false);
-  //const [formatPreference, setFormatPreference] = useState<'default' | 'bullets' | 'table' | 'preserve_tables'>('default');
-  
-  // Project Management States
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [currentProject, setCurrentProject] = useState<Project | null>(null);
-  const [threads, setThreads] = useState<Thread[]>([]);
+const ChatApp: React.FC = () => {
+  // UI State
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showProjectPanel, setShowProjectPanel] = useState(false);
-  const [showNewProjectModal, setShowNewProjectModal] = useState(false);
-  const [newProjectName, setNewProjectName] = useState("");
-  const [newProjectDescription, setNewProjectDescription] = useState("");
-  
-  // Share States
-  const [showShareModal, setShowShareModal] = useState(false);
-  const [shareLinks, setShareLinks] = useState<ShareLink[]>([]);
-  const [sharePermissions, setSharePermissions] = useState<'read' | 'collaborate'>('read');
-  const [shareExpiryDays, setShareExpiryDays] = useState(1);
-  const [creatingShare, setCreatingShare] = useState(false);
-  
-  // Mobile UI States
   const [isMobile, setIsMobile] = useState(false);
+  
+  // Modal States
+  const [showNewProjectModal, setShowNewProjectModal] = useState(false);
+  const [showThreadShareModal, setShowThreadShareModal] = useState(false);
+  const [selectedThreadForShare, setSelectedThreadForShare] = useState<{ id: string; title: string } | null>(null);
 
-  // Copy Modal States
-  const [showCopyModal, setShowCopyModal] = useState(false);
-  const [copyOptions, setCopyOptions] = useState<{ label: string; content: string; type: string }[]>([]);
+  // Custom Hooks
+  const {
+    projects,
+    currentProject,
+    loading: projectsLoading,
+    loadProjects,
+    createProject,
+    deleteProject,
+    loadProject
+  } = useProjects();
 
-  // Mobile delete menu states
-  const [showProjectDeleteMenu, setShowProjectDeleteMenu] = useState<string | null>(null);
-  const [showThreadDeleteMenu, setShowThreadDeleteMenu] = useState<string | null>(null);
+  const {
+    threads,
+    saveThread,
+    deleteThread: deleteThreadService,
+    updateThreadsFromProject,
+    loadThread
+  } = useThreads();
 
-  const chatContainerRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const {
+    messages,
+    loading: chatLoading,
+    typing,
+    threadId,
+    setThreadId,
+    sendMessage,
+    clearChat,
+    setMessagesFromThread
+  } = useChat();
+
+  const {
+    webSearchEnabled,
+    searchInProgress,
+    setSearchInProgress,
+    toggleWebSearch
+  } = useWebSearch();
+
+  const { autoSaveStatus } = useAutoSave(
+    threadId,
+    messages,
+    currentProject?.id || null,
+    saveThread,
+    threads
+  );
 
   // Check for mobile device
   useEffect(() => {
@@ -103,1724 +90,192 @@ const ChatApp = () => {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  // Initial load from API
+  // Initial load
   useEffect(() => {
-    fetch('/api/projects')
-      .then(res => res.json())
-      .then(data => {
-        const normalized = (data.projects || []).map((p: any) => ({
-          ...p,
-          threads: Array.isArray(p.threads) ? p.threads.map((t: any) => typeof t === 'string' ? t : t.id) : []
-        }));
-        setProjects(normalized);
-
-        if (!data.projects || data.projects.length === 0) {
-          setShowProjectPanel(true);
-          setShowNewProjectModal(true);
-        }
-      })
-      .catch(err => console.error('Error loading projects:', err));
-  }, []);
-
-  // Scroll to bottom when messages change
-  useEffect(() => {
-    chatContainerRef.current?.scrollTo({
-      top: chatContainerRef.current.scrollHeight,
-      behavior: "smooth",
+    loadProjects().catch(err => {
+      console.error('Failed to load projects:', err);
+      setShowProjectPanel(true);
+      setShowNewProjectModal(true);
     });
-  }, [messages]);
+  }, [loadProjects]);
 
-  // Handle scroll to show/hide jump buttons
-    useEffect(() => {
-      const chatContainer = chatContainerRef.current;
-      if (!chatContainer) return;
-
-      const handleScroll = () => {
-        const { scrollTop, scrollHeight, clientHeight } = chatContainer;
-        const isNearTop = scrollTop < 200;
-        const isNearBottom = scrollTop + clientHeight > scrollHeight - 200;
-        
-        // Show jump buttons when not near top or bottom
-        setShowJumpButtons(!isNearTop || !isNearBottom);
-      };
-
-      chatContainer.addEventListener('scroll', handleScroll);
-      return () => chatContainer.removeEventListener('scroll', handleScroll);
-    }, []);
-
-    // Jump functions
-    const jumpToTop = () => {
-      chatContainerRef.current?.scrollTo({
-        top: 0,
-        behavior: "smooth",
-      });
-    };
-
-    const jumpToBottom = () => {
-      chatContainerRef.current?.scrollTo({
-        top: chatContainerRef.current.scrollHeight,
-        behavior: "smooth",
-      });
-    };
-
-  // Load shares when modal opens
-  useEffect(() => {
-    if (currentProject && showShareModal) {
-      loadProjectShares(currentProject.id);
+  // Event Handlers
+  const handleSendMessage = async (message: string, fileIds: string[]) => {
+    try {
+      setSearchInProgress(webSearchEnabled);
+      const response = await sendMessage(message, webSearchEnabled, fileIds);
+      
+      // Auto-save to current project if new thread created
+      if (response.threadId && response.threadId !== threadId && currentProject) {
+        await saveThread(response.threadId, currentProject.id, [
+          ...messages,
+          { role: 'user', content: message, timestamp: new Date().toLocaleString() },
+          { role: 'assistant', content: response.reply, timestamp: new Date().toLocaleString() }
+        ]);
+      }
+    } catch (error) {
+      console.error('Send message error:', error);
+      alert(formatErrorMessage(error));
+    } finally {
+      setSearchInProgress(false);
     }
-  }, [currentProject, showShareModal]);
-
-  const currentProjectThreadIdSet = useMemo(
-    () => new Set(currentProject?.threads ?? []),
-    [currentProject]
-  );
-
-
-  // new function to render different file types (odf, text, documents, spreadsheet and image file types)
-// REPLACE your FileRenderer component with this improved version:
-
-const FileRenderer = ({ file }: { file: any }) => {
-  const isImage = file.type === 'image' || file.type === 'image_url';
-  const downloadUrl = file.file_id ? `/api/files/${file.file_id}` : file.url;
-  const previewUrl = file.file_id ? `/api/files/${file.file_id}?preview=true` : file.url;
-  
-  const getFileIcon = () => {
-    if (isImage) return '🖼️';
-    return '📎';
   };
 
-  // Enhanced download handler for mobile and desktop compatibility
-  const handleDownload = (e: React.MouseEvent) => {
-    e.preventDefault();
-    
-    // Force download by opening in new window with download attribute
-    const link = document.createElement('a');
-    link.href = downloadUrl;
-    link.download = file.description || 'download';
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    
-    // Add to DOM, click, and remove
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  return (
-    <div className="border rounded-lg p-3 mb-2 bg-gray-50">
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-medium">{getFileIcon()} {file.description}</span>
-        <div className="flex gap-2">
-          {isImage && (
-            <button 
-              onClick={() => window.open(previewUrl, '_blank')}
-              className="text-blue-600 text-sm px-2 py-1 border rounded hover:bg-blue-50"
-            >
-              👁️ Preview
-            </button>
-          )}
-          <button
-            onClick={handleDownload}
-            className="text-blue-600 text-sm px-2 py-1 border rounded hover:bg-blue-50"
-          >
-            ⬇️ {isMobile ? 'Open' : 'Download'}
-          </button>
-        </div>
-      </div>
-      {isImage && (
-        <div className="mt-2">
-          <img 
-            src={previewUrl} 
-            alt={file.description}
-            className="max-w-full h-auto max-h-64 rounded border"
-            onError={(e) => {
-              e.currentTarget.style.display = 'none';
-            }}
-          />
-        </div>
-      )}
-    </div>
-  );
-};
-
-  // Thread Sync Function - NEW
-  const syncProjectThreads = async (projectId: string, threadIds: string[]) => {
-  if (!threadIds || threadIds.length === 0) {
-    alert('No threads to sync');
-    return;
-  }
-  
-  try {
-    console.log('Starting thread sync for project:', projectId);
-    
-    const response = await fetch('/api/sync-threads', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ projectId, threadIds, generateSmartTitles: true })
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Sync failed: ${response.status}`);
-    }
-    
-    const result = await response.json();
-    console.log('Sync results:', result);
-    
-    const message = `Thread Sync Complete!\n\n` +
-      `Total: ${result.totalThreads}\n` +
-      `Synced: ${result.synced}\n` +
-      `Smart Titles Generated: ${result.smartTitlesGenerated || result.synced}\n` +
-      `Errors: ${result.errors}\n\n` +
-      `All threads now have intelligent titles based on their content.`;
-    
-    alert(message);
-    
-    // Reload the project to show synced threads with smart titles
-    if (result.synced > 0) {
-      await loadProject(projectId);
-    }
-    
-  } catch (error: any) {
-    console.error('Sync error:', error);
-    alert(`Failed to sync threads: ${error.message}`);
-  }
-};
-
-
-  // Helper function to extract text content
-  const extractTextContent = (content: any): string => {
-    if (typeof content === 'string') {
-      // Convert <br> tags to newlines and clean up
-      let cleaned = content
-        .replace(/<br\s*\/?>/gi, '\n')
-        .replace(/&lt;br\s*\/?&gt;/gi, '\n')
-        .replace(/\s*<br>\s*/gi, '\n')
-        .replace(/\s*&lt;br&gt;\s*/gi, '\n');
+  const handleSelectProject = async (project: any) => {
+    try {
+      const loadedProject = await loadProject(project.id);
+      const { threads: projectThreads } = await ProjectService.getProject(project.id);
       
-      // Clean up old search artifacts that might be stored in the database
-      cleaned = cleanSearchArtifactsFromContent(cleaned);
+      updateThreadsFromProject(projectThreads, project.id);
       
-      return cleaned;
-    }
-    
-    if (typeof content === 'object' && content !== null) {
-      if (Array.isArray(content)) {
-        return content
-          .map(item => {
-            if (typeof item === 'string') {
-              let cleaned = item.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
-              return cleanSearchArtifactsFromContent(cleaned);
-            }
-            if (item.type === 'text' && item.text) {
-              let cleaned = item.text.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
-              return cleanSearchArtifactsFromContent(cleaned);
-            }
-            if (item.text && typeof item.text === 'string') {
-              let cleaned = item.text.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
-              return cleanSearchArtifactsFromContent(cleaned);
-            }
-            return '';
-          })
-          .filter(Boolean)
-          .join('\n');
-      }
-      
-      if (content.text && typeof content.text === 'string') {
-        let cleaned = content.text.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
-        return cleanSearchArtifactsFromContent(cleaned);
-      }
-      
-      if (typeof content.content === 'string') {
-        let cleaned = content.content.replace(/<br\s*\/?>/gi, '\n').replace(/&lt;br\s*\/?&gt;/gi, '\n');
-        return cleanSearchArtifactsFromContent(cleaned);
-      }
-      
-      try {
-        return JSON.stringify(content, null, 2);
-      } catch {
-        return '[Complex content - cannot display]';
-      }
-    }
-    
-    return String(content || '');
-  };
-
-  // Enhanced function to generate intelligent thread titles
-  const generateSmartThreadTitle = (messages: Message[]): string => {
-    if (!messages || messages.length === 0) {
-      return "New Chat";
-    }
-
-    // Get first three substantial user messages (skip greetings like "Hi")
-    const userMessages = messages
-      .filter(msg => 
-        msg.role === "user" && 
-        typeof msg.content === 'string' && 
-        msg.content.trim().length > 5 &&
-        !msg.content.trim().toLowerCase().match(/^(hi|hello|hey|good morning|good afternoon|good evening|thanks|thank you)$/i)
-      )
-      .slice(0, 3);
-
-    if (userMessages.length === 0) {
-      return "New Chat";
-    }
-
-    // Combine content from up to 3 messages to get better context
-    let content = userMessages
-      .map(msg => typeof msg.content === 'string' ? msg.content.trim() : '')
-      .join(' ');
-    
-    // Clean up the content
-    content = content.replace(/\n+/g, ' '); // Replace newlines with spaces
-    content = content.replace(/\s+/g, ' '); // Normalize whitespace
-    
-    // Remove common question words and phrases at the start for cleaner titles
-    content = content.replace(/^(what|how|why|when|where|who|which|can you|could you|please|help me|i need|i want|tell me|explain|show me)\s+/i, '');
-    
-    // Remove question marks and exclamation points from the end
-    content = content.replace(/[?!]+$/, '');
-    
-    // Capitalize first letter
-    content = content.charAt(0).toUpperCase() + content.slice(1);
-    
-    // Truncate to reasonable length and add ellipsis if needed
-    if (content.length > 50) {
-      // Try to cut at a word boundary
-      const truncated = content.substring(0, 47);
-      const lastSpace = truncated.lastIndexOf(' ');
-      if (lastSpace > 20) {
-        content = truncated.substring(0, lastSpace) + '...';
+      // Load first thread if available
+      if (loadedProject.threads.length > 0) {
+        const threadMessages = await loadThread(loadedProject.threads[0]);
+        setMessagesFromThread(threadMessages);
+        setThreadId(loadedProject.threads[0]);
       } else {
-        content = truncated + '...';
+        clearChat();
       }
-    }
-    
-    // Fallback if content becomes too short after processing
-    if (content.length < 3) {
-      return `Chat - ${new Date().toLocaleDateString()}`;
-    }
-    
-    return content;
-  };
-
-  // Jump button states
-  const [showJumpButtons, setShowJumpButtons] = useState(false);
-
-  // Simple function to get or create "Default" project
-const getOrCreateDefaultProject = async (): Promise<Project | null> => {
-  try {
-    // Check if "Default" project already exists
-    let defaultProject = projects.find(p => p.name === "Default");
-    
-    if (defaultProject) {
-      return defaultProject;
-    }
-
-    // Create "Default" project
-    const response = await fetch('/api/projects', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: "Default",
-        description: "Default project for conversations",
-        color: "#6B7280"
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error('Failed to create Default project');
-    }
-
-    const payload = await response.json();
-    const newDefaultProject = payload.project ?? payload;
-    
-    // Update local state
-    setProjects(prev => [...prev, newDefaultProject]);
-    
-    return newDefaultProject;
-
-  } catch (error) {
-    console.error('Error creating Default project:', error);
-    return null;
-  }
-  };
-
-
-  // Enhanced function to generate titles based on conversation topic
-  const generateContextualTitle = (messages: Message[]): string => {
-    if (!messages || messages.length === 0) {
-      return "New Chat";
-    }
-
-    // Get first three substantial user messages for better context
-    const userMessages = messages
-      .filter(msg => 
-        msg.role === "user" && 
-        typeof msg.content === 'string' &&
-        msg.content.trim().length > 5 &&
-        !msg.content.trim().toLowerCase().match(/^(hi|hello|hey|good morning|good afternoon|good evening|thanks|thank you)$/i)
-      )
-      .slice(0, 3)
-      .map(msg => msg.content.toLowerCase());
-
-    if (userMessages.length === 0) {
-      return "New Chat";
-    }
-
-    // Define topic keywords and their corresponding titles
-    const topicPatterns = [
-            {
-        keywords: ['Antigua and Barbuda', 'Antigua', 'Barbuda'],
-        title: 'Antigua and Barbuda'
-      },
-      {
-        keywords: ['Bahamas', 'The Bahamas'],
-        title: 'Bahamas'
-      },
-      {
-        keywords: ['Barbados'],
-        title: 'Barbados'
-      },
-      {
-        keywords: ['Belize'],
-        title: 'Belize'
-      },
-      {
-        keywords: ['Cuba'],
-        title: 'Cuba'
-      },
-      {
-        keywords: ['Dominica'],
-        title: 'Dominica'
-      },
-      {
-        keywords: ['Dominican Republic', 'DR'],
-        title: 'Dominican Republic'
-      },
-      {
-        keywords: ['Grenada'],
-        title: 'Grenada'
-      },
-      {
-        keywords: ['Guyana'],
-        title: 'Guyana'
-      },
-      {
-        keywords: ['Haiti'],
-        title: 'Haiti'
-      },
-      {
-        keywords: ['Jamaica'],
-        title: 'Jamaica'
-      },
-      {
-        keywords: ['Saint Kitts and Nevis', 'St Kitts and Nevis', 'St Kitts', 'Nevis'],
-        title: 'Saint Kitts and Nevis'
-      },
-      {
-        keywords: ['Saint Lucia', 'St Lucia'],
-        title: 'Saint Lucia'
-      },
-      {
-        keywords: [
-          'Saint Vincent and the Grenadines',
-          'St Vincent and the Grenadines',
-          'Saint Vincent',
-          'St Vincent',
-          'SVG'
-        ],
-        title: 'Saint Vincent and the Grenadines'
-      },
-      {
-        keywords: ['Suriname'],
-        title: 'Suriname'
-      },
-      {
-        keywords: ['Trinidad and Tobago', 'Trinidad', 'Tobago', 'T&T'],
-        title: 'Trinidad and Tobago'
-      },
-      {
-        keywords: ['Aruba'],
-        title: 'Aruba'
-      },
-      {
-        keywords: ['Curaçao', 'Curacao'],
-        title: 'Curaçao'
-      },
-      {
-        keywords: ['Sint Maarten', 'St Maarten (Dutch)', 'St Maarten'],
-        title: 'Sint Maarten'
-      },
-      {
-        keywords: ['Bermuda'],
-        title: 'Bermuda'
-      },
-      {
-        keywords: ['Cayman Islands', 'Cayman'],
-        title: 'Cayman Islands'
-      },
-      {
-        keywords: ['Turks and Caicos Islands', 'Turks and Caicos', 'Turks & Caicos', 'TCI'],
-        title: 'Turks and Caicos Islands'
-      },
-      {
-        keywords: ['British Virgin Islands', 'BVI'],
-        title: 'British Virgin Islands'
-      },
-      {
-        keywords: ['Anguilla'],
-        title: 'Anguilla'
-      },
-      {
-        keywords: ['Montserrat'],
-        title: 'Montserrat'
-      },
-      {
-        keywords: ['Guadeloupe'],
-        title: 'Guadeloupe'
-      },
-      {
-        keywords: ['Martinique'],
-        title: 'Martinique'
-      },
-      {
-        keywords: ['Saint Martin (French)', 'St Martin (French)', 'Saint Martin FR', 'St Martin FR'],
-        title: 'Saint Martin (French)'
-      },
-      {
-        keywords: ['Saint Barthélemy', 'St Barthelemy', 'St Barts', 'Saint Barts'],
-        title: 'Saint Barthélemy'
-      },
-      {
-        keywords: ['Puerto Rico', 'PR'],
-        title: 'Puerto Rico'
-      },
-      {
-        keywords: ['United States Virgin Islands', 'US Virgin Islands', 'USVI'],
-        title: 'United States Virgin Islands'
-      },
-      {
-        keywords: ['United Kingdom', 'UK', 'Britain', 'Great Britain', 'England'],
-        title: 'United Kingdom'
-      },
-      {
-        keywords: ['United States', 'United States of America', 'USA', 'US', 'America'],
-        title: 'United States'
-      },
-      {
-        keywords: ['India', 'Republic of India', 'Bharat'],
-        title: 'India'
-      }
-    ];
-
-    // Check for topic patterns
-    const allText = userMessages.join(' ');
-    for (const pattern of topicPatterns) {
-      const matchCount = pattern.keywords.reduce((count, keyword) => {
-        return count + (allText.includes(keyword) ? 1 : 0);
-      }, 0);
       
-      if (matchCount >= 1) {
-        return pattern.title;
-      }
+      setShowProjectPanel(false);
+    } catch (error) {
+      console.error('Select project error:', error);
+      alert(formatErrorMessage(error));
     }
-
-    // Fall back to first message processing
-    return generateSmartThreadTitle(messages);
   };
 
-  // Helper function to clean search artifacts from stored content
-const cleanSearchArtifactsFromContent = (text: string): string => {
+  const handleSelectThread = async (threadId: string) => {
+    try {
+      const threadMessages = await loadThread(threadId);
+      setMessagesFromThread(threadMessages);
+      setThreadId(threadId);
+      
+      if (isMobile) {
+        setShowProjectPanel(false);
+      }
+    } catch (error) {
+      console.error('Select thread error:', error);
+      alert(formatErrorMessage(error));
+    }
+  };
 
-  console.log('=== FRONTEND CLEANUP DEBUG ===');
-    console.log('Cleanup function called with text:', text.substring(0, 100));
-  
-  if (text.includes('/api/files/')) {
-    console.log('Found file links, skipping cleanup');
-    return text;
-  }
-  console.log('Processing text length:', text.length);
-  console.log('Text preview:', text.substring(0, 200));
-  
-  // Check for file download links
-  const hasFileLinks = text.includes('/api/files/');
-  console.log('Contains file links:', hasFileLinks);
-  
-  if (hasFileLinks) {
-    console.log('SKIPPING cleanup for message with file links');
-    const fileLinks = text.match(/\/api\/files\/[a-zA-Z0-9-_]+/g);
-    console.log('File links found:', fileLinks);
-    return text;
-  }
-  
-  console.log('Proceeding with cleanup (no file links)');
-  
-  let cleaned = text;
-  
-  // Rest of cleanup logic...
-  cleaned = cleaned.replace(/\[Current Web Information[^\]]*\]:\s*/gi, '');
-  cleaned = cleaned.replace(/Web Summary:\s*[^\n]*\n/gi, '');
-  cleaned = cleaned.replace(/Top Search Results:\s*\n[\s\S]*?Instructions:[^\n]*\n/gi, '');
-  cleaned = cleaned.replace(/Instructions: Please incorporate this current web information[^\n]*\n?/gi, '');
-  cleaned = cleaned.replace(/\[Note: Web search was requested[^\]]*\]/gi, '');
-  cleaned = cleaned.replace(/\d+\.\s+\[PDF\]\s+[^\n]*\n\s*[^\n]*\.\.\.\s*Source:\s*https?:\/\/[^\s]+\s*/gi, '');
-  cleaned = cleaned.replace(/\d+\.\s+[^.]+\.\.\.\s*Source:\s*https?:\/\/[^\s]+\s*/gi, '');
-  cleaned = cleaned.replace(/^\s*---\s*\n/gm, '');
-  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
-  cleaned = cleaned.replace(/^\s+|\s+$/g, '');
-  
-  console.log('Cleanup completed, removed', text.length - cleaned.length, 'characters');
-  console.log('=== END FRONTEND CLEANUP ===');
-  
-  return cleaned;
-};
+  const handleCreateProject = async (projectData: { name: string; description?: string; color?: string }) => {
+    try {
+      await createProject(projectData);
+      setShowNewProjectModal(false);
+      setShowProjectPanel(true);
+    } catch (error) {
+      console.error('Create project error:', error);
+      alert(formatErrorMessage(error));
+    }
+  };
 
-  const randomColor = () => `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0')}`;
-  const SEARCH_FLAG = '___WEB_SEARCH_IN_PROGRESS___';
-
-  // Project Management Functions
-  const deleteProject = async (projectId: string) => {
+  const handleDeleteProject = async (projectId: string) => {
     if (!confirm('Delete this project and all its chats? This cannot be undone.')) {
       return;
     }
     
     try {
-      const res = await fetch(`/api/projects/${projectId}`, {
-        method: 'DELETE'
-      });
-      
-      if (!res.ok) throw new Error('Failed to delete project');
-      
-      setProjects(prev => prev.filter(p => p.id !== projectId));
-      
+      await deleteProject(projectId);
       if (currentProject?.id === projectId) {
-        setCurrentProject(null);
-        setMessages([]);
-        setThreadId(null);
+        clearChat();
       }
-    } catch (err) {
-      console.error('Delete project error:', err);
-      alert('Failed to delete project');
+    } catch (error) {
+      console.error('Delete project error:', error);
+      alert(formatErrorMessage(error));
     }
   };
 
-  const deleteThread = async (threadId: string) => {
+  const handleDeleteThread = async (threadId: string) => {
     if (!confirm('Delete this chat? This cannot be undone.')) {
       return;
     }
     
     try {
-      const res = await fetch(`/api/threads/${threadId}`, {
-        method: 'DELETE'
-      });
-      
-      if (!res.ok) throw new Error('Failed to delete thread');
-      
-      setThreads(prev => prev.filter(t => t.id !== threadId));
-      
-      if (currentProject) {
-        setProjects(prev => prev.map(p => {
-          if (p.id === currentProject.id) {
-            return {
-              ...p,
-              threads: p.threads.filter(id => id !== threadId)
-            };
-          }
-          return p;
-        }));
-      }
-      
+      await deleteThreadService(threadId);
       if (threadId === threadId) {
-        setMessages([]);
-        setThreadId(null);
-      }
-    } catch (err) {
-      console.error('Delete thread error:', err);
-      alert('Failed to delete chat');
-    }
-  };
-
-  const createProject = async () => {
-    if (!newProjectName.trim()) return;
-    try {
-      const res = await fetch('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: newProjectName,
-          description: newProjectDescription,
-          color: randomColor()
-        })
-      });
-      if (!res.ok) throw new Error('Failed to create project');
-      const payload = await res.json();
-      const created = payload.project ?? payload;
-      setProjects(prev => [...prev, created]);
-      setCurrentProject(created);
-      setNewProjectName('');
-      setNewProjectDescription('');
-      setShowNewProjectModal(false);
-      setShowProjectPanel(true);
-    } catch (err) {
-      console.error('Create Project error:', err);
-    }
-  };
-
-  // Updated loadProject function with sync detection
-  const loadProject = async (projectId: string) => {
-    try {
-      console.log('Loading project:', projectId);
-      const response = await fetch(`/api/projects/${projectId}`);
-      if (!response.ok) throw new Error('Failed to load project');
-      const data = await response.json();
-      
-      console.log('Project data received:', data);
-
-      // Handle different possible data structures
-      let threadObjs: any[] = [];
-      let threadIds: string[] = [];
-      
-      if (Array.isArray(data.threads)) {
-        threadObjs = data.threads;
-        threadIds = threadObjs.map((t: any) => t.id || t.thread_id || t);
-      } else if (data.threads && typeof data.threads === 'object') {
-        threadObjs = Object.values(data.threads);
-        threadIds = threadObjs.map((t: any) => t.id || t.thread_id || t);
-      } else if (data.thread_ids && Array.isArray(data.thread_ids)) {
-        // If we only have thread IDs but no thread objects
-        threadIds = data.thread_ids;
-        console.log('Only thread IDs found, may need sync:', threadIds);
-      }
-      
-      console.log('Thread objects extracted:', threadObjs);
-      console.log('Thread IDs:', threadIds);
-
-      setCurrentProject({ ...data, threads: threadIds });
-
-      // Update threads state
-      setThreads(prev => {
-        const filteredPrev = prev.filter(t => !threadIds.includes(t.id));
-        const newThreads = threadObjs.map((t: any) => ({
-          id: t.id || t.thread_id,
-          projectId: data.id,
-          title: t.title || t.name || 'Untitled',
-          lastMessage: t.lastMessage || t.last_message || '',
-          createdAt: t.createdAt || t.created_at || new Date().toISOString()
-        })).filter(t => t.id);
-        
-        console.log('New threads to add:', newThreads);
-        return [...filteredPrev, ...newThreads];
-      });
-
-      // Check if we have thread IDs but no thread objects (need sync)
-      if (threadIds.length > 0 && threadObjs.length === 0) {
-        console.log('Thread IDs found but no thread data - sync may be needed');
-        
-        // Show sync option to user
-        const shouldSync = confirm(
-          `Found ${threadIds.length} thread(s) that need to be synced from OpenAI.\n\n` +
-          `Would you like to sync them now? This will load the conversations into your database.`
-        );
-        
-        if (shouldSync) {
-          await syncProjectThreads(projectId, threadIds);
-          return; // syncProjectThreads will reload the project
-        }
-      }
-
-      // Load first thread if available
-      if (threadIds.length > 0 && threadIds[0]) {
-        console.log('Loading first thread:', threadIds[0]);
-        await loadThread(threadIds[0]);
-      } else {
-        console.log('No threads to load');
-        setMessages([]);
-        setThreadId(null);
+        clearChat();
       }
     } catch (error) {
-      console.error('Load Project Error:', error);
-      alert('Failed to load project. Check console for details.');
+      console.error('Delete thread error:', error);
+      alert(formatErrorMessage(error));
     }
   };
-  // Function to Auto-hide on Project Selection, Auto-hide on Thread Selection and Auto-hide on New Chat
-  const selectProject = (project: Project) => {
-    loadProject(project.id);
-    // Auto-hide panel on mobile and Desktop after selecting project
-    //if (isMobile) {
-      setShowProjectPanel(false);
-    //}
-  };
 
-  // Updated loadThread function with better debugging
-  const loadThread = async (threadId: string) => {
+  const handleSyncThreads = async (projectId: string, threadIds: string[]) => {
     try {
-      console.log('Loading thread:', threadId);
+      const response = await ProjectService.syncThreads(projectId, threadIds);
       
-      // Try the primary endpoint first
-      let response = await fetch(`/api/threads?threadId=${threadId}`);
+      const message = `Thread Sync Complete!\n\n` +
+        `Total: ${response.totalThreads}\n` +
+        `Synced: ${response.synced}\n` +
+        `Smart Titles Generated: ${response.smartTitlesGenerated || response.synced}\n` +
+        `Errors: ${response.errors}`;
       
-      // If that fails, try alternative endpoint structure
-      if (!response.ok) {
-        console.log('Primary endpoint failed, trying alternative...');
-        response = await fetch(`/api/threads/${threadId}`);
-      }
+      alert(message);
       
-      if (!response.ok) {
-        throw new Error(`Failed to load thread: ${response.status} ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      console.log('Thread data received:', data);
-      
-      // Handle different possible response structures
-      let messages = [];
-      if (data.messages) {
-        messages = data.messages;
-      } else if (data.thread && data.thread.messages) {
-        messages = data.thread.messages;
-      } else if (Array.isArray(data)) {
-        messages = data;
-      }
-      
-      console.log('Messages extracted:', messages.length, 'messages');
-      
-      // Clean messages when loading old threads
-      const cleanedMessages = messages.map((msg: Message) => ({
-        ...msg,
-        content: typeof msg.content === 'string' ? cleanSearchArtifactsFromContent(msg.content) : msg.content
-      }));
-      
-      setMessages(cleanedMessages);
-      setThreadId(threadId);
-      console.log('Thread loaded successfully');
-      
-    } catch (error) {
-      console.error("Load Thread Error:", error);
-      alert(`Failed to load thread: ${error}`);
-    }
-    // Auto-hide panel on mobile after loading thread
-    if (isMobile) {
-      setShowProjectPanel(false);
-    }
-  };
-
-
-// Simplified saveThreadToProjectWithId function
-const saveThreadToProjectWithId = async (newThreadId: string) => {
-  let projectToUse = currentProject;
-
-  // If no project selected, use/create Default project
-  if (!projectToUse) {
-    projectToUse = await getOrCreateDefaultProject();
-    if (!projectToUse) {
-      console.error('Failed to create Default project, cannot save thread');
-      return;
-    }
-  }
-
-  const smartTitle = generateContextualTitle(messages);
-
-  const thread: Thread = {
-    id: newThreadId,
-    projectId: projectToUse.id,
-    title: smartTitle,
-    lastMessage: messages[messages.length - 1]?.content.substring(0, 100),
-    createdAt: new Date().toISOString()
-  };
-
-  try {
-    const response = await fetch('/api/threads', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...thread, messages })
-    });
-    
-    if (response.ok) {
-      setThreads(prev => [...prev.filter(t => t.id !== newThreadId), thread]);
-      
-      setProjects(prev => prev.map(p => {
-        if (p.id === projectToUse!.id) {
-          const currentThreads = Array.isArray(p.threads) ? p.threads : [];
-          if (!currentThreads.includes(newThreadId)) {
-            return { ...p, threads: [...currentThreads, newThreadId] };
-          }
-        }
-        return p;
-      }));
-      
-      console.log(`Thread saved to "${projectToUse.name}" with title: "${smartTitle}"`);
-    } else {
-      console.error('Failed to save thread:', await response.text());
-    }
-  } catch (error) {
-    console.error("Save Thread error:", error);
-  }
-};
-
-  // Function to bulk update existing threads with smart titles
-  const updateAllThreadTitles = async () => {
-    if (!currentProject) {
-      alert('Please select a project first');
-      return;
-    }
-
-    if (!confirm('This will update all "New Chat" threads in this project with smart titles based on their content. Continue?')) {
-      return;
-    }
-
-    try {
-      const response = await fetch('/api/update-thread-titles', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: currentProject.id })
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to update thread titles');
-      }
-
-      const result = await response.json();
-      
-      if (result.success) {
-        // Update local state with new titles
-        if (result.results) {
-          const updatedThreads = result.results
-            .filter((r: any) => r.status === 'updated')
-            .map((r: any) => ({ id: r.threadId, title: r.newTitle }));
-          
-          setThreads(prev => prev.map(t => {
-            const updated = updatedThreads.find((ut: any) => ut.id === t.id);
-            return updated ? { ...t, title: updated.title } : t;
-          }));
-        }
-
-        const message = `Title Update Complete!\n\n` +
-          `Updated: ${result.updated}\n` +
-          `Total processed: ${result.total}\n\n` +
-          `All eligible threads now have smart titles!`;
-        
-        alert(message);
-      } else {
-        throw new Error(result.error || 'Unknown error');
-      }
-
-    } catch (error: any) {
-      console.error('Failed to update thread titles:', error);
-      alert(`Failed to update thread titles: ${error.message}`);
-    }
-  };
-
-  // Simple mobile save button
-  const renderMobileSaveButton = () => {
-    if (!threadId || messages.length === 0) {
-      return null;
-    }
-
-    const existingThread = threads.find(t => t.id === threadId);
-    
-    if (existingThread) {
-      return (
-        <button className="flex-1 py-2 px-3 bg-gray-400 text-white rounded-lg text-sm">
-          ✅ Saved
-        </button>
-      );
-    }
-
-    return (
-      <button
-        className="flex-1 py-2 px-3 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm"
-        onClick={saveThreadToProject}
-      >
-        💾 Save
-      </button>
-    );
-  };
-
-// Simplified saveThreadToProject function  
-  const saveThreadToProject = async () => {
-    if (!threadId || messages.length === 0) {
-      return;
-    }
-
-    let projectToUse = currentProject;
-
-    // If no project selected, use/create Default project
-    if (!projectToUse) {
-      projectToUse = await getOrCreateDefaultProject();
-      if (!projectToUse) {
-        alert('Failed to create Default project');
-        return;
-      }
-    }
-
-    // Check if already saved
-    const existingThread = threads.find(t => t.id === threadId);
-    if (existingThread) {
-      return; // Already saved
-    }
-
-    const smartTitle = generateContextualTitle(messages);
-
-    const thread: Thread = {
-      id: threadId,
-      projectId: projectToUse.id,
-      title: smartTitle,
-      lastMessage: messages[messages.length - 1]?.content.substring(0, 100),
-      createdAt: new Date().toISOString()
-    };
-    
-    try {
-      const response = await fetch('/api/threads', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...thread, messages })
-      });
-      
-      if (response.ok) {
-        setThreads(prev => [...prev, thread]);
-        
-        setProjects(prev => prev.map(p => {
-          if (p.id === projectToUse!.id) {
-            const currentThreads = Array.isArray(p.threads) ? p.threads : [];
-            if (!currentThreads.includes(threadId)) {
-              return { ...p, threads: [...currentThreads, threadId] };
-            }
-          }
-          return p;
-        }));
-
-        console.log(`Thread saved to "${projectToUse.name}" with title: "${smartTitle}"`);
-      } else {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to save thread');
+      if (response.synced > 0) {
+        await loadProject(projectId);
       }
     } catch (error) {
-      console.error("Manual save error:", error);
+      console.error('Sync error:', error);
+      alert(`Failed to sync threads: ${formatErrorMessage(error)}`);
     }
   };
 
-  // Share Functions
-  const loadProjectShares = async (projectId: string) => {
-    try {
-      const response = await fetch(`/api/projects/${projectId}/shares`);
-      if (response.ok) {
-        const data = await response.json();
-        setShareLinks(data.shares || []);
-      }
-    } catch (error) {
-      console.error('Load shares error:', error);
-    }
-  };
-
-  const createShareLink = async () => {
-    if (!currentProject || creatingShare) return;
-    
-    setCreatingShare(true);
-    try {
-      const response = await fetch(`/api/projects/${currentProject.id}/shares`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          permissions: sharePermissions,
-          expiryDays: shareExpiryDays
-        })
-      });
-
-      if (!response.ok) throw new Error('Failed to create share link');
-      
-      const data = await response.json();
-      
-      await navigator.clipboard.writeText(data.shareUrl);
-      alert(`Share link created and copied!\nExpires: ${new Date(data.expiresAt).toLocaleString()}`);
-      
-      loadProjectShares(currentProject.id);
-      
-    } catch (error) {
-      console.error('Create share error:', error);
-      alert('Failed to create share link');
-    } finally {
-      setCreatingShare(false);
-    }
-  };
-
-  const revokeShareLink = async (shareToken: string) => {
-    if (!currentProject || !confirm('Revoke this share link?')) return;
-    
-    try {
-      const response = await fetch(`/api/projects/${currentProject.id}/shares?token=${shareToken}`, {
-        method: 'DELETE'
-      });
-
-      if (!response.ok) throw new Error('Failed to revoke share');
-      loadProjectShares(currentProject.id);
-      
-    } catch (error) {
-      console.error('Revoke share error:', error);
-      alert('Failed to revoke share link');
-    }
-  };
-
-  const copyShareLink = async (shareUrl: string) => {
-    try {
-      await navigator.clipboard.writeText(shareUrl);
-      alert('Share link copied to clipboard!');
-    } catch (error) {
-      console.error('Copy error:', error);
-    }
-  };
-
-  // Copy Functions
-  const copyLastBotResponse = async () => {
-    try {
-      const lastBotMessage = messages
-        .slice()
-        .reverse()
-        .find(msg => msg.role === "assistant");
-      
-      if (!lastBotMessage) {
-        alert("No bot response found to copy.");
-        return;
-      }
-      
-      const content = extractTextContent(lastBotMessage.content);
-      await navigator.clipboard.writeText(content);
-      alert("Last bot response copied to clipboard!");
-    } catch (error) {
-      console.error("Failed to copy last response:", error);
-      alert("Failed to copy response to clipboard.");
-    }
-  };
-
-  const extractTables = (content: string): string[] => {
-    const tables: string[] = [];
-    const tableRegex = /\|[^|\n]*\|[^|\n]*\|[\s\S]*?(?=\n\n|\n$|$)/g;
-    const markdownTables = content.match(tableRegex);
-    
-    if (markdownTables) {
-      tables.push(...markdownTables.map(table => table.trim()));
-    }
-    
-    return tables;
-  };
-
-  const extractCodeBlocks = (content: string): string[] => {
-    const codeBlocks: string[] = [];
-    const codeRegex = /```[\s\S]*?```/g;
-    const matches = content.match(codeRegex);
-    
-    if (matches) {
-      codeBlocks.push(...matches.map(block => block.trim()));
-    }
-    
-    return codeBlocks;
-  };
-
-  const extractLists = (content: string): string[] => {
-    const lists: string[] = [];
-    
-    const numberedListRegex = /(?:^|\n)((?:\d+\.\s+[^\n]+(?:\n(?:\s{2,}[^\n]+|\d+\.\s+[^\n]+))*)+)/gm;
-    const numberedMatches = content.match(numberedListRegex);
-    
-    if (numberedMatches) {
-      lists.push(...numberedMatches.map(list => list.trim()));
-    }
-    
-    const bulletListRegex = /(?:^|\n)((?:[*-]\s+[^\n]+(?:\n(?:\s{2,}[^\n]+|[*-]\s+[^\n]+))*)+)/gm;
-    const bulletMatches = content.match(bulletListRegex);
-    
-    if (bulletMatches) {
-      lists.push(...bulletMatches.map(list => list.trim()));
-    }
-    
-    return lists;
-  };
-
-  const copyEmbeddedContent = async () => {
-    try {
-      const lastBotMessage = messages
-        .slice()
-        .reverse()
-        .find(msg => msg.role === "assistant");
-      
-      if (!lastBotMessage) {
-        alert("No bot response found.");
-        return;
-      }
-      
-      const content = extractTextContent(lastBotMessage.content);
-      
-      const tables = extractTables(content);
-      const codeBlocks = extractCodeBlocks(content);
-      const lists = extractLists(content);
-      
-      const options: { label: string; content: string; type: string }[] = [];
-      
-      options.push({
-        label: "📄 Full Response",
-        content: content,
-        type: "full"
-      });
-      
-      tables.forEach((table, index) => {
-        const preview = table.split('\n')[0].substring(0, 50) + '...';
-        options.push({
-          label: `📊 Table ${index + 1}: ${preview}`,
-          content: table,
-          type: "table"
-        });
-      });
-      
-      codeBlocks.forEach((code, index) => {
-        const firstLine = code.split('\n')[0].replace(/```\w*/, '').substring(0, 30);
-        options.push({
-          label: `💻 Code Block ${index + 1}: ${firstLine}...`,
-          content: code,
-          type: "code"
-        });
-      });
-      
-      lists.forEach((list, index) => {
-        const firstItem = list.split('\n')[0].substring(0, 40) + '...';
-        options.push({
-          label: `📋 List ${index + 1}: ${firstItem}`,
-          content: list,
-          type: "list"
-        });
-      });
-      
-      if (options.length === 1) {
-        await navigator.clipboard.writeText(content);
-        alert("Full response copied to clipboard!");
-        return;
-      }
-      
-      setShowCopyModal(true);
-      setCopyOptions(options);
-      
-    } catch (error) {
-      console.error("Failed to extract content:", error);
-      alert("Failed to extract content.");
-    }
-  };
-
-  const copySelectedContent = async (content: string, label: string) => {
-    try {
-      await navigator.clipboard.writeText(content);
-      alert(`${label} copied to clipboard!`);
-      setShowCopyModal(false);
-    } catch (error) {
-      console.error("Failed to copy content:", error);
-      alert("Failed to copy content to clipboard.");
-    }
-  };
-
-  // File handling functions
-  // Replace your handleFileUpload function with this clean version:
-
-const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-  const files = event.target.files;
-  if (!files || files.length === 0) return;
-  
-  setUploadingFile(true);
-  const newFileIds: string[] = [];
-  const successfulUploads: File[] = [];
-  
-  try {
-    for (const file of Array.from(files)) {
-      const MAX_SIZE = 20 * 1024 * 1024;
-      if (file.size > MAX_SIZE) {
-        console.log(`File ${file.name} exceeds 20MB limit`);
-        continue;
-      }
-      
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('purpose', 'assistants');
-      
-      try {
-        const response = await fetch('/api/upload', {
-          method: 'POST',
-          body: formData,
-        });
-        
-        if (!response.ok) {
-          const error = await response.json();
-          console.error(`Failed to upload ${file.name}:`, error.error);
-          continue;
-        }
-        
-        const data = await response.json();
-        if (data.fileId) {
-          newFileIds.push(data.fileId);
-          successfulUploads.push(file);
-          console.log(`Successfully uploaded: ${file.name}`);
-        }
-      } catch (err) {
-        console.error(`Network error uploading ${file.name}:`, err);
-      }
-    }
-    
-    // Only update state for successful uploads - no system messages
-    if (successfulUploads.length > 0) {
-      setFileIds(prev => [...prev, ...newFileIds]);
-      setUploadedFiles(prev => [...prev, ...successfulUploads]);
-    }
-    
-  } catch (error: any) {
-    console.error("File upload error:", error);
-  } finally {
-    setUploadingFile(false);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  }
-};
-
-
-  const removeFile = (index: number) => {
-    setUploadedFiles(prev => prev.filter((_, i) => i !== index));
-    setFileIds(prev => prev.filter((_, i) => i !== index));
-  };
-
-  // Send message function
-  const sendMessage = async () => {
-  if (activeRun || !input.trim()) return;
-  setActiveRun(true);
-  setLoading(true);
-  
-  if (webSearchEnabled) setSearchInProgress(true);
-  
-  // Store the original user message (without search context)
-  const userMessage = {
-    role: "user",
-    content: input,
-    timestamp: new Date().toLocaleString(),
-    fileIds: fileIds.length > 0 ? [...fileIds] : undefined
-  };
-  setMessages((prev) => [...prev, userMessage]);
-  setInput("");
-  
-  // Show search indicator if web search is enabled
-  if (webSearchEnabled) {
-    setMessages(prev => [
-      ...prev,
-      {
-        role: "system",
-        content: `🔍 Searching the web for current information... ${SEARCH_FLAG}`,
-        timestamp: new Date().toLocaleString(),
-      }
-    ]);
-  } 
-
-  try {
-    setTyping(true);
-    const response = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: input,
-        originalMessage: input,
-        threadId: threadId,
-        webSearchEnabled: webSearchEnabled,
-        fileIds: fileIds.length > 0 ? fileIds : undefined
-      }),
-    });
-
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    
-    const responseText = await response.text();
-    let data;
-    try {
-      data = JSON.parse(responseText);
-      console.log("=== DEBUG FRONTEND ===");
-      console.log("API Response Data:", JSON.stringify(data, null, 2));
-      console.log("Files from API:", data.files);
-      console.log("=== END DEBUG ===");
-    } catch (parseError) {
-      console.error('Failed to parse JSON response:', responseText);
-      throw new Error('Invalid JSON response from server');
-    }
-
-    if (data.error) throw new Error(data.error);
-
-    if (data.threadId && data.threadId !== threadId) {
-      setThreadId(data.threadId);
-      if (currentProject) {
-        saveThreadToProjectWithId(data.threadId);
-      }
-    }
-
-    // Remove search indicator
-    if (webSearchEnabled) {
-      setMessages(prev => prev.filter(msg =>
-        !(msg.role === "system" && typeof msg.content === 'string' && msg.content.includes(SEARCH_FLAG))
-      ));
-    }
-
-    if (fileIds.length > 0) {
-      setFileIds([]);
-      setUploadedFiles([]);
-    }
-    
-    // Clean the response to remove any search context that might have leaked through
-    let cleanReply = data.reply || "No response received";
-    
-    // Remove any search context markers that might appear
-    cleanReply = cleanReply.replace(/\[Current Web Information[^\]]*\]:\s*/gi, '');
-    cleanReply = cleanReply.replace(/Web Summary:\s*[^\n]*\n/gi, '');
-    cleanReply = cleanReply.replace(/Top Search Results:\s*\n[\s\S]*?Instructions:[^\n]*\n/gi, '');
-    cleanReply = cleanReply.replace(/Instructions: Please incorporate this current web information[^\n]*\n?/gi, '');
-    
-    setMessages((prev) => [
-      ...prev,
-      { 
-        role: "assistant", 
-        content: cleanReply,
-        files: data.files,
-        timestamp: new Date().toLocaleString() 
-      },
-    ]);
-  } catch (error: any) {
-    console.error("Error:", error);
-
-    if (webSearchEnabled) {
-      setMessages(prev => prev.filter(msg =>
-        !(msg.role === "system" && typeof msg.content === 'string' && msg.content.includes(SEARCH_FLAG))
-      ));
-    }
-    
-    let errorMessage = "Unable to reach assistant.";
-    if (error.message) errorMessage = error.message;
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "assistant",
-        content: `Error: ${errorMessage}`,
-        timestamp: new Date().toLocaleString(),
-      },
-    ]);
-  } finally {
-    setTyping(false);
-    setLoading(false);
-    setActiveRun(false);
-    setSearchInProgress(false);
-  }
-};
-
-  
-// Utility functions
-  const copyChatToClipboard = async () => {
-    const chatText = messages
-      .map((msg) => `${msg.timestamp} - ${msg.role === "user" ? "You" : msg.role === "system" ? "System" : "Digital Strategy Bot"}:\n${msg.content}`)
-      .join("\n\n");
-    try {
-      await navigator.clipboard.writeText(chatText);
-      alert("Chat copied to clipboard!");
-    } catch (err) {
-      console.error("Failed to copy chat: ", err);
-      alert("Failed to copy chat to clipboard.");
-    }
-  };
-
-  const clearChat = () => {
-    setMessages([]);
-    setThreadId(null);
-    setFileIds([]);
-    setUploadedFiles([]);
-  };
-
-  const startNewChat = () => {
+  const handleNewChat = () => {
     clearChat();
     setShowProjectPanel(false);
-
   };
 
-  // One-time cleanup function for existing threads
-  const cleanupAllThreads = async () => {
-    if (!confirm('This will clean up search artifacts from all your existing chats. Continue?')) {
-      return;
-    }
+  const openThreadShareModal = (thread: { id: string; title: string }) => {
+    setSelectedThreadForShare(thread);
+    setShowThreadShareModal(true);
+  };
 
-    try {
-      const response = await fetch('/api/cleanup-threads', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        alert(`Cleanup completed! ${data.cleaned} threads were cleaned.`);
-        
-        // Reload current thread if any to show cleaned version
-        if (threadId) {
-          await loadThread(threadId);
-        }
-      } else {
-        throw new Error('Cleanup failed');
-      }
-    } catch (error) {
-      console.error('Cleanup error:', error);
-      alert('Cleanup failed. Please try again.');
-    }
+  const closeThreadShareModal = () => {
+    setShowThreadShareModal(false);
+    setSelectedThreadForShare(null);
   };
 
   return (
     <div className="h-[100svh] md:h-screen w-full flex flex-col bg-neutral-50 md:flex-row overflow-hidden">
-      {/* Desktop Sidebar / Mobile Menu */}
-      <AnimatePresence>
-        {(showProjectPanel || !isMobile) && (
-          <motion.div
-            initial={{ x: isMobile ? -300 : 0 }}
-            animate={{ x: 0 }}
-            exit={{ x: -300 }}
-            className={`${
-              isMobile 
-                ? 'fixed inset-y-0 left-0 z-50 w-80 bg-gray-50' 
-                : `relative bg-white/80 backdrop-blur flex flex-col ring-1 ring-gray-200 shadow-sm transition-[width] duration-300 ease-in-out ${sidebarOpen ? "w-80" : "w-0 overflow-hidden"}`
-            } flex flex-col`}
-          >
-            {/* Project Header */}
-            <div className="sticky top-0 z-30 p-4 bg-white/80 backdrop-blur border-b border-gray-200">
-              <div className="flex items-center justify-between">
-                <h3 className="font-semibold text-lg">Projects</h3>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setShowNewProjectModal(true)}
-                    className="text-blue-600 hover:text-blue-700 text-sm"
-                  >
-                    + New
-                  </button>
-                  {currentProject && (
-                    <>
-                      <button
-                        onClick={() => setShowShareModal(true)}
-                        className="text-blue-600 hover:text-blue-700 text-sm"
-                      >
-                        🔗 Share
-                      </button>
-                      <button
-                        onClick={() => syncProjectThreads(currentProject.id, currentProject.threads)}
-                        className="text-green-600 hover:text-green-700 text-sm"
-                      >
-                        🔄 Sync
-                      </button>
-                    </>
-                  )}
-                  {isMobile && (
-                    <button
-                      onClick={() => setShowProjectPanel(false)}
-                      className="text-gray-500 hover:text-gray-700"
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
-              </div>
-              
-              {currentProject && (
-                <div className="mt-2 p-2 bg-blue-50 rounded-md">
-                  <div className="flex items-center gap-2">
-                    <div 
-                      className="w-3 h-3 rounded-full" 
-                      style={{ backgroundColor: currentProject.color }}
-                    />
-                    <span className="text-sm font-medium">{currentProject.name}</span>
-                  </div>
-                  {currentProject.description && (
-                    <p className="text-xs text-gray-600 mt-1">{currentProject.description}</p>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Projects List */}
-            <div className="flex-1 overflow-y-auto p-4">
-              <div className="space-y-2">
-                {projects.map((project) => (
-                  <div key={project.id} className="relative group">
-                    <button
-                      onClick={() => selectProject(project)}
-                      className={`w-full text-left p-3 rounded-lg transition-colors ${
-                        currentProject?.id === project.id
-                          ? 'bg-blue-100 border-blue-300'
-                          : 'bg-white hover:bg-gray-100'
-                      } border`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <div 
-                          className="w-3 h-3 rounded-full flex-shrink-0" 
-                          style={{ backgroundColor: project.color }}
-                        />
-                        <div className="flex-1 min-w-0">
-                          <div className="font-medium text-sm">{project.name}</div>
-                          <div className="text-xs text-gray-500">
-                            {Array.isArray(project.threads) ? project.threads.length : 0} chat(s)
-                          </div>
-                        </div>
-                      </div>
-                    </button>
-                    
-                    {/* Desktop delete button */}
-                    {!isMobile && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteProject(project.id);
-                        }}
-                        className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-100 rounded"
-                        title="Delete project"
-                      >
-                        <svg className="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
-                    )}
-                    
-                    {/* Mobile three-dot menu */}
-                    {isMobile && (
-                      <div className="absolute top-2 right-2">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setShowProjectDeleteMenu(showProjectDeleteMenu === project.id ? null : project.id);
-                          }}
-                          className="p-1 hover:bg-gray-100 rounded"
-                        >
-                          <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
-                          </svg>
-                        </button>
-                        
-                        {/* Mobile delete dropdown */}
-                        {showProjectDeleteMenu === project.id && (
-                          <div className="absolute right-0 top-8 bg-white rounded-xl ring-1 ring-gray-100 shadow-lg py-1 z-20 min-w-[120px]">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                deleteProject(project.id);
-                                setShowProjectDeleteMenu(null);
-                              }}
-                              className="block w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50"
-                            >
-                              🗒️ Delete Project
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              {/* Recent Threads in Current Project */}
-              {currentProject && (
-                <div className="mt-6">
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">Recent Chats</h4>
-                  <div className="space-y-1">
-                    {threads
-                      .filter(t => currentProject.threads.includes(t.id))
-                      .slice(0, 5)
-                      .map((thread) => (
-                        <div key={thread.id} className="relative group">
-                          <button
-                            onClick={() => loadThread(thread.id)}
-                            className={`w-full text-left p-2 rounded text-sm ${
-                              threadId === thread.id
-                                ? 'bg-blue-50 text-blue-700'
-                                : 'hover:bg-gray-100'
-                            }`}
-                          >
-                            <div className="truncate">{thread.title}</div>
-                            <div className="text-xs text-gray-500 truncate">
-                              {thread.lastMessage}
-                            </div>
-                          </button>
-                          
-                          {/* Desktop delete button */}
-                          {!isMobile && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                deleteThread(thread.id);
-                              }}
-                              className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-100 rounded"
-                              title="Delete chat"
-                            >
-                              <svg className="w-3 h-3 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                              </svg>
-                            </button>
-                          )}
-                          
-                          {/* Mobile three-dot menu */}
-                          {isMobile && (
-                            <div className="absolute top-2 right-2">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setShowThreadDeleteMenu(showThreadDeleteMenu === thread.id ? null : thread.id);
-                                }}
-                                className="p-1 hover:bg-gray-100 rounded"
-                              >
-                                <svg className="w-3 h-3 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
-                                </svg>
-                              </button>
-                              
-                              {showThreadDeleteMenu === thread.id && (
-                                <div className="absolute right-0 top-6 bg-white rounded-xl ring-1 ring-gray-100 shadow-lg py-1 z-20 min-w-[100px]">
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      deleteThread(thread.id);
-                                      setShowThreadDeleteMenu(null);
-                                    }}
-                                    className="block w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50"
-                                  >
-                                    🗒️ Delete Chat
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                  </div>
-                  <button
-                    onClick={startNewChat}
-                    className="mt-2 w-full text-center text-sm text-blue-600 hover:text-blue-700 py-2"
-                  >
-                    + Start New Chat
-                  </button>
-                </div>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Sidebar */}
+      <ProjectSidebar
+        isOpen={isMobile ? showProjectPanel : sidebarOpen}
+        isMobile={isMobile}
+        projects={projects}
+        currentProject={currentProject}
+        threads={threads}
+        currentThreadId={threadId}
+        onClose={() => setShowProjectPanel(false)}
+        onSelectProject={handleSelectProject}
+        onSelectThread={handleSelectThread}
+        onNewProject={() => setShowNewProjectModal(true)}
+        onDeleteProject={handleDeleteProject}
+        onDeleteThread={handleDeleteThread}
+        onShareThread={openThreadShareModal}
+        onNewChat={handleNewChat}
+        onSyncThreads={handleSyncThreads}
+      />
 
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Header - Fixed according to OpenAI suggestions */}
+        {/* Header */}
         <header className="sticky top-0 z-40 w-full p-3 md:p-4 bg-white/80 backdrop-blur border-b border-gray-200">
           <div className="relative flex items-center justify-between">
-            {/* Left: Desktop toggle button */}
-            {!isMobile && (
+            {/* Toggle Button */}
+            {!isMobile ? (
               <button
                 onClick={() => setSidebarOpen(!sidebarOpen)}
                 className="flex items-center gap-2 p-2 rounded-lg hover:bg-gray-100"
-                aria-pressed={sidebarOpen}
-                title={sidebarOpen ? "Hide panel" : "Show panel"}
               >
                 <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h10" />
                 </svg>
                 <span className="text-sm text-gray-700">{sidebarOpen ? "Hide panel" : "Show panel"}</span>
               </button>
-            )}
-            
-            {/* Mobile hamburger button */}
-            {isMobile && (
+            ) : (
               <button
                 onClick={() => setShowProjectPanel(!showProjectPanel)}
                 className="p-2 hover:bg-gray-100 rounded-lg"
@@ -1831,16 +286,15 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
               </button>
             )}
 
-            {/* Center: Title block - Fixed positioning */}
+            {/* Title */}
             <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2">
               {!isMobile && <img src="/icon.png" alt="Icon" className="h-8 w-8 md:h-10 md:w-10" />}
               <h2 className={`font-semibold tracking-tight text-gray-900 ${isMobile ? 'text-base' : 'text-lg md:text-xl'}`}>
-                {isMobile ? 'Digital Strategy Bot' : 'Digital Strategy Bot'}
+                Digital Strategy Bot
               </h2>
             </div>
 
-
-            {/* Right: Optional status */}
+            {/* Project Info */}
             <div className="flex items-center gap-2">
               {!isMobile && currentProject && (
                 <>
@@ -1855,756 +309,58 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
           </div>
         </header>
 
-        {/* Chat Container */}
-        {/* Chat Container - REPLACE the section starting around line 1200 */}
-        <div className="flex-1 flex flex-col p-2 md:p-4 overflow-hidden">
-          <div
-            ref={chatContainerRef}
-            className="flex-1 overflow-y-auto overflow-x-hidden ring-1 ring-gray-200 shadow-sm rounded-2xl bg-white p-4 md:p-5 space-y-4 pb-28 chat-container"
-          >
-            {messages.map((msg, index) => (
-              <motion.div key={index}>
-                <p className="font-bold mb-1 text-sm md:text-base">
-                  {msg.role === "user" ? "You" : msg.role === "system" ? "System" : "Digital Strategy Bot"}{" "}
-                  {msg.timestamp && (
-                    <span className="text-xs text-gray-500">({msg.timestamp})</span>
-                  )}
-                </p>
-                <div
-                  className={`p-3 rounded-md ${
-                    msg.role === "user"
-                      ? "bg-gray-200 text-black"
-                      : msg.role === "system"
-                      ? "bg-blue-50 text-blue-900 border-blue-200"
-                      : "bg-white text-black border"
-                  }`}
-                >
-                  <div className="message-content chat-message">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        h1: ({ children, ...props }) => (
-                          <h1 className="text-xl md:text-2xl font-bold mt-4 md:mt-6 mb-3 md:mb-4 text-gray-900" {...props}>{children}</h1>
-                        ),
-                        h2: ({ children, ...props }) => (
-                          <h2 className="text-lg md:text-xl font-semibold mt-3 md:mt-5 mb-2 md:mb-3 text-gray-800" {...props}>{children}</h2>
-                        ),
-                        h3: ({ children, ...props }) => (
-                          <h3 className="text-base md:text-lg font-semibold mt-3 md:mt-4 mb-2 text-gray-800" {...props}>{children}</h3>
-                        ),
-                        p: ({ children, ...props }) => (
-                          <p className="mb-3 md:mb-4 leading-relaxed text-sm md:text-base text-gray-700" {...props}>{children}</p>
-                        ),
-                        a: ({ href, children, ...props }) => {
-                          const isCitation = href?.startsWith('http');
-                          const isFileDownload = href?.startsWith('/api/files/');
-                          
-                          if (isFileDownload) {
-                            // Force external link behavior for file downloads
-                            return (
-                              <a 
-                                href={href}
-                                download
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-600 hover:text-blue-800 underline"
-                                {...props}
-                              >
-                                {children}
-                              </a>
-                            );
-                          }
-                          
-                          return (
-                            <a 
-                              href={href} 
-                              target="_blank" 
-                              rel="noopener noreferrer"
-                              className={isCitation 
-                                ? "text-blue-600 hover:text-blue-800 underline decoration-1 hover:decoration-2 transition-colors"
-                                : "text-blue-600 hover:text-blue-800 underline"
-                              }
-                              {...props}
-                            >
-                              {children}
-                              {isCitation && <span className="text-xs ml-1">↗</span>}
-                            </a>
-                          );
-                        },
-                        code: ({ inline, className, children, ...props }: any) => {
-                          return !inline ? (
-                            <pre className="bg-gray-900 text-gray-100 rounded-lg p-3 md:p-4 overflow-x-auto mb-3 md:mb-4 text-xs md:text-sm">
-                              <code className={className} {...props}>
-                                {children}
-                              </code>
-                            </pre>
-                          ) : (
-                            <code className="bg-gray-100 text-red-600 px-1 py-0.5 rounded text-xs md:text-sm font-mono" {...props}>
-                              {children}
-                            </code>
-                          );
-                        },
-                        ul: ({ children, ...props }) => (
-                          <ul className="list-disc pl-5 md:pl-6 mb-3 md:mb-4 space-y-1 md:space-y-2 text-sm md:text-base" {...props}>{children}</ul>
-                        ),
-                        ol: ({ children, ...props }) => (
-                          <ol className="list-decimal pl-5 md:pl-6 mb-3 md:mb-4 space-y-1 md:space-y-2 text-sm md:text-base" {...props}>{children}</ol>
-                        ),
-                        li: ({ children, ...props }) => (
-                          <li className="text-gray-700 leading-relaxed text-sm md:text-base" {...props}>{children}</li>
-                        ),
-                        // UPDATED TABLE COMPONENTS - This is the main fix
-                        table: ({ children, ...props }) => (
-                          <div className="my-4 w-full overflow-x-auto border border-gray-300 rounded-lg bg-white">
-                            <table className="w-full md:w-full border-collapse text-xs md:text-sm" style={{ minWidth: '500px' }} {...props}>
-                              {children}
-                            </table>
-                          </div>
-                        ),
+        {/* Messages */}
+        <MessageList 
+          messages={messages} 
+          typing={typing} 
+          isMobile={isMobile} 
+        />
 
-                        th: ({ children, ...props }) => (
-                          <th className="border-r border-gray-300 px-2 md:px-4 py-1 md:py-3 text-left font-semibold text-gray-900 bg-gray-100 align-top whitespace-nowrap" {...props}>
-                            {children}
-                          </th>
-                        ),
-
-                        td: ({ children, ...props }) => (
-                          <td className="border-r border-gray-300 px-2 md:px-4 py-1 md:py-3 text-gray-700 align-top" {...props}>
-                            <div className="break-words">
-                              {children}
-                            </div>
-                          </td>
-                        ),
-                        
-                        blockquote: ({ children, ...props }) => (
-                          <blockquote className="border-l-4 border-gray-300 pl-3 md:pl-4 py-2 mb-3 md:mb-4 italic text-gray-600 text-sm md:text-base" {...props}>
-                            {children}
-                          </blockquote>
-                        ),
-                        img: ({ src, alt, ...props }) => {
-                          if (!src || src.trim() === '') {
-                            return <span className="text-gray-500 italic">[Image not available]</span>;
-                          }
-                          
-                          if (src.startsWith('/api/files/')) {
-                            return (
-                              <div className="my-2 p-2 border rounded bg-gray-50">
-                                <span className="text-sm text-gray-600">📎 {alt || 'Download File'}</span>
-                                <a 
-                                  href={src}
-                                  download
-                                  className="ml-2 text-blue-600 hover:text-blue-800 underline text-sm"
-                                >
-                                  Download
-                                </a>
-                              </div>
-                            );
-                          }
-                          
-                          return (
-                            <img 
-                              src={src} 
-                              alt={alt || ''} 
-                              className="max-w-full h-auto rounded border"
-                              onError={(e) => {
-                                e.currentTarget.style.display = 'none';
-                              }}
-                              {...props}
-                            />
-                          );
-                        },
-                        strong: ({ children, ...props }) => (
-                          <strong className="font-semibold text-gray-900" {...props}>{children}</strong>
-                        ),
-                      }}
-                    >
-                      {extractTextContent(msg.content)}
-                    </ReactMarkdown>
-                    {msg.files && msg.files.length > 0 && (
-                      <div className="mt-3">
-                        {msg.files.map((file, fileIndex) => {
-                          // Skip rendering FileRenderer if the file is already linked in the text content
-                          const isAlreadyLinkedInText = typeof msg.content === 'string' && 
-                            msg.content.includes(`/api/files/${file.file_id}`);
-                          
-                          // Only render FileRenderer for files not already embedded in text
-                          if (isAlreadyLinkedInText) {
-                            return null;
-                          }
-                          
-                          return <FileRenderer key={fileIndex} file={file} />;
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </motion.div>
-            ))}
-
-            {/* Typing Indicator */}
-            {typing && (
-              <div className="flex items-center gap-2 text-gray-500 italic p-2">
-                <span className="flex gap-1">
-                  <span className="animate-bounce" style={{ animationDelay: '0ms' }}>●</span>
-                  <span className="animate-bounce" style={{ animationDelay: '150ms' }}>●</span>
-                  <span className="animate-bounce" style={{ animationDelay: '300ms' }}>●</span>
-                </span>
-                <span className="text-sm">Assistant is typing...</span>
-              </div>
-            )}
-          </div>
-          {/* Jump to Top/Bottom Buttons */}
-            {showJumpButtons && messages.length > 5 && (
-              <div className="absolute right-4 bottom-20 flex flex-col gap-2 z-30">
-                <button
-                  onClick={jumpToTop}
-                  className="w-10 h-10 bg-blue-500 hover:bg-blue-600 text-white rounded-full shadow-lg flex items-center justify-center transition-all duration-200 opacity-80 hover:opacity-100"
-                  title="Jump to top"
-                >
-                  ↑
-                </button>
-                <button
-                  onClick={jumpToBottom}
-                  className="w-10 h-10 bg-blue-500 hover:bg-blue-600 text-white rounded-full shadow-lg flex items-center justify-center transition-all duration-200 opacity-80 hover:opacity-100"
-                  title="Jump to bottom"
-                >
-                  ↓
-                </button>
-              </div>
-            )}
-        </div>
-
-        {/* Settings & Features Bar */}
+        {/* Controls */}
         <div className="border-t bg-gray-50">
-          {/* Desktop Layout */}
-          {!isMobile && (
-            <div className="p-3">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-4">
-                  {/* Web Search Toggle */}
-                  <label className="flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={webSearchEnabled}
-                      onChange={(e) => setWebSearchEnabled(e.target.checked)}
-                      className="mr-2 w-4 h-4 text-blue-600 rounded"
-                    />
-                    <span className="text-sm flex items-center gap-1">
-                      {searchInProgress ? (
-                        <span className="animate-pulse">🔍</span>
-                      ) : (
-                        <span>🌐</span>
-                      )}
-                      Web Search
-                      {webSearchEnabled && (
-                        <span className="text-xs text-green-600 font-semibold">ON</span>
-                      )}
-                    </span>
-                  </label>
-
-                  {/* File Upload */}
-                  {!isMobile && (
-                    <div className="flex items-center">
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        multiple
-                        onChange={handleFileUpload}
-                        className="hidden"
-                        accept=".txt,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.json,.xml,.html,.md,.jpg,.jpeg,.png,.gif,.webp,.bmp,.tiff"
-                      />
-                      <button
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={uploadingFile}
-                        className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700 disabled:opacity-50"
-                      >
-                        {uploadingFile ? (
-                          <>
-                            <span className="animate-spin">⟳</span>
-                            Uploading...
-                          </>
-                        ) : (
-                          <>
-                            📎 Attach Files
-                            <span className="text-xs text-gray-500">(PDF, DOC, PPT, Excel, CSV, Images - Max 20MB)</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Status Indicators */}
-                <div className="flex items-center gap-3 text-sm">
-                  {webSearchEnabled && (
-                    <span className="px-2 py-1 bg-blue-50 text-blue-700 rounded-full text-xs">
-                      Tavily Active
-                    </span>
-                  )}
-                  {threadId && (
-                    <span className="text-xs text-gray-500">
-                      ID: {threadId.substring(0, 8)}...
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Enhanced Uploaded Files Display */}
-              {uploadedFiles.length > 0 && (
-                <div className="flex flex-wrap gap-2 p-3 bg-green-50 border border-green-200 rounded-md">
-                  <div className="flex items-center gap-2 w-full mb-2">
-                    <span className="text-sm text-green-700 font-medium">
-                      ✅ {uploadedFiles.length} file{uploadedFiles.length > 1 ? 's' : ''} ready to send:
-                    </span>
-                  </div>
-                  {uploadedFiles.map((file, index) => (
-                    <div
-                      key={index}
-                      className="flex items-center gap-2 px-3 py-2 bg-white border border-green-300 rounded-md text-sm shadow-sm"
-                    >
-                      <span className="text-green-600">
-                        {file.type.startsWith('image/') ? '🖼️' : 
-                        file.type.includes('pdf') ? '📄' : 
-                        file.type.includes('word') || file.type.includes('document') ? '📝' : 
-                        file.type.includes('powerpoint') || file.type.includes('presentation') ? '📊' : 
-                        file.type.includes('excel') || file.type.includes('spreadsheet') ? '📈' : 
-                        file.type.includes('csv') ? '📋' : '📎'}
-                      </span>
-                      <span className="max-w-[150px] truncate font-medium">{file.name}</span>
-                      <span className="text-xs text-gray-500">
-                        ({(file.size / 1024 / 1024).toFixed(1)}MB)
-                      </span>
-                      <button
-                        onClick={() => removeFile(index)}
-                        className="ml-2 text-red-500 hover:text-red-700 font-bold"
-                        title="Remove file"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Mobile Layout */}
-          {isMobile && (
-            <div className="p-2">
-              {/* Compact Mobile Controls */}
-              <div className="flex items-center gap-2 mb-2">
-                <button
-                  onClick={() => setWebSearchEnabled(!webSearchEnabled)}
-                  className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors ${
-                    webSearchEnabled 
-                      ? 'bg-blue-600 text-white' 
-                      : 'bg-gray-200 text-gray-700'
-                  }`}
-                >
-                  🌐 Web Search {webSearchEnabled && '✓'}
-                </button>
-
-              </div>
-
-              {/* Mobile Files Display - Enhanced */}
-              {uploadedFiles.length > 0 && (
-                <div className="bg-green-50 border border-green-200 rounded-md p-2">
-                  <div className="text-xs text-green-700 font-medium mb-1">
-                    ✅ {uploadedFiles.length} file{uploadedFiles.length > 1 ? 's' : ''} ready:
-                  </div>
-                  <div className="flex gap-1 overflow-x-auto pb-1">
-                    {uploadedFiles.map((file, index) => (
-                      <div
-                        key={index}
-                        className="flex items-center gap-1 px-2 py-1 bg-white border border-green-300 rounded text-xs whitespace-nowrap shadow-sm"
-                      >
-                        <span>
-                          {file.type.startsWith('image/') ? '🖼️' : 
-                          file.type.includes('pdf') ? '📄' : 
-                          file.type.includes('word') || file.type.includes('document') ? '📝' : 
-                          file.type.includes('powerpoint') || file.type.includes('presentation') ? '📊' : 
-                          file.type.includes('excel') || file.type.includes('spreadsheet') ? '📈' : 
-                          file.type.includes('csv') ? '📋' : '📎'}
-                        </span>
-                        <span className="max-w-[80px] truncate">{file.name}</span>
-                        <button
-                          onClick={() => removeFile(index)}
-                          className="text-red-500 font-bold"
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-
-
-
-          
-          {/* Input & Controls */}
-        <div className="p-3 md:p-4 bg-white/90 backdrop-blur border-t border-gray-200 z-40">
-          <div className="flex flex-col gap-2">
-            {/* Input Row */}
-            <div className="flex items-end gap-2">
-                <textarea
-                  className="flex-1 rounded-xl ring-1 ring-gray-100 px-3 py-2 text-sm md:text-base focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none min-h-[40px] max-h-[120px] overflow-y-auto"
-                  value={input}
-                  onChange={(e) => {
-                    setInput(e.target.value);
-                    // Auto-resize textarea
-                    e.target.style.height = 'auto';
-                    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      sendMessage();
-                    }
-                  }}
-                  placeholder="Type a message... (Shift+Enter for new line)"
-                  rows={1}
-                />
-              <button
-                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                  loading 
-                    ? 'bg-gray-300 text-gray-500' 
-                    : 'bg-blue-500 hover:bg-blue-600 text-white'
-                }`}
-                onClick={sendMessage}
-                disabled={loading}
-              >
-                {loading ? (
-                  <span className="animate-pulse">...</span>
-                ) : (
-                  <span>{isMobile ? '↑' : 'Send'}</span>
-                )}
-              </button>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="flex gap-2">
-              {!isMobile && (
-                <>
-                  <button
-                    className="flex-1 py-2 px-3 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm font-medium transition-colors"
-                    onClick={copyLastBotResponse}
-                  >
-                    📋 Copy Last Response
-                  </button>
-
-                  <button
-                    className="flex-1 py-2 px-3 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg text-sm font-medium transition-colors"
-                    onClick={copyChatToClipboard}
-                  >
-                    💬 Copy Chat
-                  </button>
-                  {/* Add Save button for desktop */}
-                  {threadId && messages.length > 0 && (
-                    <button
-                      className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors ${
-                        threads.find(t => t.id === threadId)
-                          ? 'bg-gray-400 text-white cursor-not-allowed'
-                          : 'bg-green-500 hover:bg-green-600 text-white'
-                      }`}
-                      onClick={saveThreadToProject}
-                      disabled={!!threads.find(t => t.id === threadId)}
-                    >
-                      {threads.find(t => t.id === threadId) ? '✅ Saved' : '💾 Save'}
-                    </button>
-                  )}
-
-                </>
-              )}
-              
-              {isMobile && (
-                <div className="flex gap-2 w-full">
-
-                  {renderMobileSaveButton()}
-                </div>
-              )}
-            </div>
+          <div className="p-3">
+            <WebSearchToggle
+              enabled={webSearchEnabled}
+              searchInProgress={searchInProgress}
+              onToggle={toggleWebSearch}
+              isMobile={isMobile}
+            />
           </div>
         </div>
+
+        {/* Input */}
+        <ChatInput
+          onSendMessage={handleSendMessage}
+          disabled={chatLoading || projectsLoading}
+          isMobile={isMobile}
+        />
       </div>
 
-      {/* New Project Modal */}
-      <AnimatePresence>
-        {showNewProjectModal && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
-            onClick={() => setShowNewProjectModal(false)}
-          >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-lg p-6 max-w-md w-full"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h3 className="text-lg font-semibold mb-4">Create New Project</h3>
-              
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Project Name *
-                  </label>
-                  <input
-                    type="text"
-                    value={newProjectName}
-                    onChange={(e) => setNewProjectName(e.target.value)}
-                    className="w-full rounded-xl ring-1 ring-gray-100 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="e.g., Research Project"
-                  />
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Description (Optional)
-                  </label>
-                  <textarea
-                    value={newProjectDescription}
-                    onChange={(e) => setNewProjectDescription(e.target.value)}
-                    className="w-full rounded-xl ring-1 ring-gray-100 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    rows={3}
-                    placeholder="Brief description of the project..."
-                  />
-                </div>
-              </div>
-              
-              <div className="flex gap-2 mt-6">
-                <button
-                  onClick={() => setShowNewProjectModal(false)}
-                  className="flex-1 py-2 px-4 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={createProject}
-                  disabled={!newProjectName.trim()}
-                  className="flex-1 py-2 px-4 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50"
-                >
-                  Create Project
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-      
-      {/* Share Modal */}
-      <AnimatePresence>
-        {showShareModal && currentProject && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
-            onClick={() => setShowShareModal(false)}
-          >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-lg p-6 max-w-lg w-full max-h-[80vh] overflow-y-auto"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                <span>🔗</span>
-                Share "{currentProject?.name}"
-              </h3>
-              
-              {/* Create New Share */}
-              <div className="bg-gray-50 p-4 rounded-lg mb-4">
-                <h4 className="font-medium mb-3">Create New Share Link</h4>
-                
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Access Level
-                    </label>
-                    <select
-                      value={sharePermissions}
-                      onChange={(e) => setSharePermissions(e.target.value as 'read' | 'collaborate')}
-                      className="w-full rounded-xl ring-1 ring-gray-100 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="read">👁️ Read Only - Can view conversations</option>
-                      <option value="collaborate">✏️ Collaborate - Can chat and contribute</option>
-                    </select>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Expires In
-                    </label>
-                    <select
-                      value={shareExpiryDays}
-                      onChange={(e) => setShareExpiryDays(Number(e.target.value))}
-                      className="w-full rounded-xl ring-1 ring-gray-100 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value={1}>1 Day (Default)</option>
-                      <option value={3}>3 Days</option>
-                      <option value={7}>1 Week</option>
-                      <option value={14}>2 Weeks</option>
-                      <option value={30}>1 Month</option>
-                    </select>
-                  </div>
-                  
-                  <button
-                    onClick={createShareLink}
-                    disabled={creatingShare}
-                    className="w-full py-2 px-4 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 font-medium"
-                  >
-                    {creatingShare ? 'Creating...' : '🔗 Create & Copy Link'}
-                  </button>
-                </div>
-              </div>
-              
-              {/* Existing Shares */}
-              <div>
-                <h4 className="font-medium mb-3">Active Share Links ({shareLinks.length})</h4>
-                
-                {shareLinks.length === 0 ? (
-                  <p className="text-gray-500 text-sm text-center py-4">
-                    No active share links. Create one above.
-                  </p>
-                ) : (
-                  <div className="space-y-2">
-                    {shareLinks.map((share) => {
-                      const isExpired = new Date(share.expires_at) < new Date();
-                      return (
-                        <div
-                          key={share.id}
-                          className={`rounded-xl ring-1 ring-gray-100 p-3 ${isExpired ? 'bg-red-50 border-red-200' : 'bg-white'}`}
-                        >
-                          <div className="flex items-center justify-between mb-2">
-                            <span className={`px-2 py-1 rounded text-xs font-medium ${
-                              share.permissions === 'collaborate' 
-                                ? 'bg-green-100 text-green-800' 
-                                : 'bg-blue-100 text-blue-800'
-                            }`}>
-                              {share.permissions === 'collaborate' ? '✏️ Collaborate' : '👁️ Read Only'}
-                            </span>
-                            
-                            <div className="flex gap-1">
-                              {!isExpired && (
-                                <button
-                                  onClick={() => copyShareLink(share.shareUrl)}
-                                  className="text-blue-600 hover:text-blue-700 text-sm px-2 py-1"
-                                >
-                                  📋 Copy
-                                </button>
-                              )}
-                              <button
-                                onClick={() => revokeShareLink(share.share_token)}
-                                className="text-red-600 hover:text-red-700 text-sm px-2 py-1"
-                              >
-                                🗒️ Revoke
-                              </button>
-                            </div>
-                          </div>
-                          
-                          <div className="text-xs text-gray-600">
-                            <div>Created: {new Date(share.created_at).toLocaleDateString()}</div>
-                            <div className={isExpired ? 'text-red-600 font-medium' : ''}>
-                              {isExpired ? 'Expired: ' : 'Expires: '}
-                              {new Date(share.expires_at).toLocaleString()}
-                            </div>
-                          </div>
-                          
-                          {!isExpired && (
-                            <div className="mt-2 text-xs text-gray-500 break-all bg-gray-50 p-1 rounded">
-                              {share.shareUrl}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-              
-              <div className="flex gap-2 mt-6">
-                <button
-                  onClick={() => setShowShareModal(false)}
-                  className="flex-1 py-2 px-4 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-                >
-                  Close
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-     
-      {/* Copy Content Selection Modal */}
-      <AnimatePresence>
-        {showCopyModal && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
-            onClick={() => setShowCopyModal(false)}
-          >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-lg p-6 max-w-lg w-full max-h-[80vh] overflow-y-auto"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                <span>📊</span>
-                Select Content to Copy
-              </h3>
-              
-              <div className="space-y-2 max-h-96 overflow-y-auto">
-                {copyOptions.map((option, index) => (
-                  <button
-                    key={index}
-                    onClick={() => copySelectedContent(option.content, option.label)}
-                    className="w-full text-left p-3 rounded-lg border hover:bg-gray-50 transition-colors"
-                  >
-                    <div className="font-medium text-sm">{option.label}</div>
-                    <div className="text-xs text-gray-500 mt-1 truncate">
-                      {option.content.substring(0, 100)}...
-                    </div>
-                  </button>
-                ))}
-              </div>
-              
-              <div className="flex gap-2 mt-6">
-                <button
-                  onClick={() => setShowCopyModal(false)}
-                  className="flex-1 py-2 px-4 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Modals */}
+      <NewProjectModal
+        isOpen={showNewProjectModal}
+        onClose={() => setShowNewProjectModal(false)}
+        onCreateProject={handleCreateProject}
+      />
 
-      {/* Click outside handler for mobile delete menus */}
-      {isMobile && (showProjectDeleteMenu || showThreadDeleteMenu) && (
+      {showThreadShareModal && selectedThreadForShare && (
+        <ThreadShareModal
+          isOpen={showThreadShareModal}
+          onClose={closeThreadShareModal}
+          threadId={selectedThreadForShare.id}
+          threadTitle={selectedThreadForShare.title}
+        />
+      )}
+
+      {/* Click outside handler for mobile */}
+      {isMobile && showProjectPanel && (
         <div 
           className="fixed inset-0 z-10" 
-          onClick={() => {
-            setShowProjectDeleteMenu(null);
-            setShowThreadDeleteMenu(null);
-          }}
+          onClick={() => setShowProjectPanel(false)}
         />
       )}
     </div>
-  ); 
+  );
 };
+
 export default ChatApp;

@@ -14,6 +14,9 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY!
 );
 
+// Replace existing console.log statements with:
+const DEBUG = process.env.NODE_ENV === 'development' && process.env.DEBUG_CHAT === 'true';
+
 // Helper function to upload OpenAI file to Vercel Blob
 async function uploadFileToVercelBlob(fileId: string, description: string): Promise<{
   blobUrl: string;
@@ -23,7 +26,9 @@ async function uploadFileToVercelBlob(fileId: string, description: string): Prom
   actualFilename: string;
 } | null> {
   try {
-    console.log(`Uploading file ${fileId} to Vercel Blob...`);
+    if (DEBUG) {
+      console.log(`Uploading file ${fileId} to Vercel Blob...`);
+    }
     
     // First get file metadata from OpenAI
     const metadataResponse = await fetch(`https://api.openai.com/v1/files/${fileId}`, {
@@ -42,10 +47,14 @@ async function uploadFileToVercelBlob(fileId: string, description: string): Prom
         // Extract just the filename from the full path
         actualFilename = metadata.filename.split('/').pop() || metadata.filename;
         contentType = getContentTypeFromFilename(actualFilename);
-        console.log(`OpenAI metadata - Original: ${metadata.filename}, Extracted: ${actualFilename}`);
+        if (DEBUG) {
+          console.log(`OpenAI metadata - Original: ${metadata.filename}, Extracted: ${actualFilename}`);
+        }
       }
     } else {
-      console.log(`Failed to get metadata for ${fileId}, using fallback filename: ${actualFilename}`);
+      if (DEBUG) {
+        console.log(`Failed to get metadata for ${fileId}, using fallback filename: ${actualFilename}`);
+      }
     }
     
     // Download file content from OpenAI
@@ -57,7 +66,9 @@ async function uploadFileToVercelBlob(fileId: string, description: string): Prom
     });
     
     if (!fileResponse.ok) {
-      console.error(`Failed to download file ${fileId} from OpenAI`);
+      if (DEBUG) {
+        console.error(`Failed to download file ${fileId} from OpenAI`);
+      }
       return null;
     }
     
@@ -75,8 +86,10 @@ async function uploadFileToVercelBlob(fileId: string, description: string): Prom
       token: process.env.VERCEL_BLOB_READ_WRITE_TOKEN,
     });
     
-    console.log(`File ${fileId} uploaded to Vercel Blob: ${blob.url}`);
-    
+    if (DEBUG) {
+      console.log(`File ${fileId} uploaded to Vercel Blob: ${blob.url}`);
+    }
+
     return {
       blobUrl: blob.url,
       fileKey: fileKey,
@@ -86,7 +99,9 @@ async function uploadFileToVercelBlob(fileId: string, description: string): Prom
     };
     
   } catch (error) {
-    console.error(`Error uploading file ${fileId} to Vercel Blob:`, error);
+    if (DEBUG) {
+      console.error(`Error uploading file ${fileId} to Vercel Blob:`, error);
+    }
     return null;
   }
 }
@@ -117,18 +132,23 @@ async function storeFileMappingInSupabase(
       });
     
     if (error) {
-      console.error('Error storing file mapping in Supabase:', error);
+      if (DEBUG) {
+        console.error('Error storing file mapping in Supabase:', error);
+      }
       return false;
     }
     
     // Update storage metrics
     await updateStorageMetrics(fileSize);
-    
-    console.log(`File mapping stored for ${openaiFileId}`);
+    if (DEBUG) {
+      console.log(`File mapping stored for ${openaiFileId}`);
+    }
     return true;
     
   } catch (error) {
+    if (DEBUG) {
     console.error('Error in storeFileMappingInSupabase:', error);
+    }
     return false;
   }
 }
@@ -156,19 +176,25 @@ async function updateStorageMetrics(addedSize: number): Promise<void> {
       });
     
     if (error) {
+      if (DEBUG) {
       console.error('Error updating storage metrics:', error);
+      }
     }
     
     // Check if cleanup is needed (400MB threshold)
     const CLEANUP_THRESHOLD = 400 * 1024 * 1024; // 400MB
     if (newTotalSize > CLEANUP_THRESHOLD) {
-      console.log(`Storage threshold exceeded (${newTotalSize} bytes), triggering cleanup...`);
+      if (DEBUG) {
+        console.log(`Storage threshold exceeded (${newTotalSize} bytes), triggering cleanup...`);
+      }  
       // Trigger cleanup (will be implemented in storage endpoints)
       await triggerStorageCleanup();
     }
     
   } catch (error) {
+    if (DEBUG) {
     console.error('Error in updateStorageMetrics:', error);
+    }
   }
 }
 
@@ -182,7 +208,9 @@ async function triggerStorageCleanup(): Promise<void> {
       headers: { 'Content-Type': 'application/json' }
     });
   } catch (error) {
+    if (DEBUG) {
     console.error('Error triggering storage cleanup:', error);
+    }
   }
 }
 
@@ -510,12 +538,13 @@ export async function POST(request: NextRequest) {
     }
 
     // Environment check
+    if (DEBUG) {
     console.log('Environment check:', {
       hasAssistantId: !!ASSISTANT_ID,
       hasApiKey: !!OPENAI_API_KEY,
       hasOrganization: !!OPENAI_ORGANIZATION
     });
-
+  }
     if (!ASSISTANT_ID || !OPENAI_API_KEY) {
       console.error('Missing OpenAI configuration');
       return NextResponse.json(
@@ -545,7 +574,9 @@ export async function POST(request: NextRequest) {
 
     // Create thread if needed
     if (!currentThreadId) {
+      if (DEBUG) {
       console.log('Creating new thread...');
+      }
       try {
         const threadRes = await axios.post(
           'https://api.openai.com/v1/threads',
@@ -553,7 +584,9 @@ export async function POST(request: NextRequest) {
           { headers }
         );
         currentThreadId = threadRes.data.id;
+        if (DEBUG) {
         console.log('Thread created:', currentThreadId);
+        }
       } catch (error: any) {
         console.error('Thread creation failed:', error.response?.data || error.message);
         return NextResponse.json(
@@ -570,7 +603,9 @@ export async function POST(request: NextRequest) {
     
     if (webSearchEnabled && TAVILY_API_KEY) {
       try {
+        if (DEBUG) {
         console.log('Performing Tavily search for:', originalMessage || message);
+        }
         
         const searchResponse = await axios.post(
           'https://api.tavily.com/search',
@@ -622,7 +657,9 @@ export async function POST(request: NextRequest) {
             enhancedMessage += 'IMPORTANT: Please provide a natural response incorporating relevant information from the search results above. Cite sources naturally when using specific information, but do not mention the search context formatting. Focus on being helpful and accurate.';
           }
           
+          if (DEBUG) {
           console.log('Web search enhanced message created');
+          }
         }
       } catch (searchError: any) {
         console.error('Tavily search failed:', searchError.response?.data || searchError.message);
@@ -665,18 +702,24 @@ export async function POST(request: NextRequest) {
         file_id: fileId,
         tools: [{ type: "file_search" }]
       }));
+      if (DEBUG) {
       console.log('Files attached to message:', fileIds);
+      }
     }
 
     // Add the SINGLE message to thread (with both content and files)
+    if (DEBUG) {
     console.log('Adding message to thread with files and enhanced content...');
+    }
     try {
       await axios.post(
         `https://api.openai.com/v1/threads/${currentThreadId}/messages`,
         messageForThread,
         { headers }
       );
+      if (DEBUG) {
       console.log('Message added to thread successfully');
+      }
     } catch (error: any) {
       console.error('Failed to add message:', error.response?.data || error.message);
       return NextResponse.json(
@@ -708,7 +751,9 @@ export async function POST(request: NextRequest) {
     // CRITICAL: Always include file_search when files are uploaded
     if (fileIds && fileIds.length > 0) {
       tools.push({ type: "file_search" });
+      if (DEBUG) {
       console.log('file_search tool enabled for file processing');
+      }
     } else if (webSearchEnabled) {
       // Include file_search for web search integration even without files
       tools.push({ type: "file_search" });
@@ -731,7 +776,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Create run
+    if (DEBUG) {
     console.log('Creating run with config:', { ...runConfig, tools });
+    }
     let runId;
     try {
       const runRes = await axios.post(
@@ -740,7 +787,9 @@ export async function POST(request: NextRequest) {
         { headers }
       );
       runId = runRes.data.id;
+      if (DEBUG) {
       console.log('Run created:', runId);
+      }
     } catch (error: any) {
       console.error('Run creation failed:', error.response?.data || error.message);
       return NextResponse.json(
@@ -764,19 +813,25 @@ export async function POST(request: NextRequest) {
         );
         
         status = statusRes.data.status;
+        if (DEBUG) {
         console.log(`Run status: ${status} (attempt ${retries + 1})`);
+        }
         
         // Handle required actions (like tool calls)
         if (status === 'requires_action') {
           const requiredAction = statusRes.data.required_action;
           if (requiredAction?.type === 'submit_tool_outputs') {
+            if (DEBUG) {
             console.log('Tool outputs required:', requiredAction);
+            }
             // Tool output handling can be implemented here if needed
           }
         }
         
         if (status === 'failed') {
+          if (DEBUG) {
           console.error('Run failed:', statusRes.data);
+          }
           break;
         }
         
@@ -784,7 +839,9 @@ export async function POST(request: NextRequest) {
           break;
         }
       } catch (error: any) {
+        if (DEBUG) {
         console.error('Status check failed:', error.response?.data || error.message);
+        }
         break;
       }
       
@@ -796,7 +853,9 @@ export async function POST(request: NextRequest) {
     let extractedResponse;
 
     if (status === 'completed') {
+      if (DEBUG) {
       console.log('Run completed, fetching messages...');
+      }
       try {
         const messagesRes = await axios.get(
           `https://api.openai.com/v1/threads/${currentThreadId}/messages`,
@@ -822,13 +881,17 @@ export async function POST(request: NextRequest) {
           // If JSON format was requested, try to parse the response
           if (useJsonFormat) {
             parsedResponse = parseAssistantJsonResponse(reply);
+            if (DEBUG) {
             console.log('Parsed JSON response:', parsedResponse);
+            }
           }
         } else {
           extractedResponse = { type: 'text', content: reply };
         }
         
+        if (DEBUG) {
         console.log('Reply extracted and cleaned successfully');
+        }
       } catch (error: any) {
         console.error('Failed to fetch messages:', error.response?.data || error.message);
         reply = 'Failed to fetch response.';
@@ -881,7 +944,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(responseObj);
 
   } catch (error: any) {
+    if (DEBUG) {
     console.error('API Error:', error.response?.data || error.message);
+    }
     
     let errorMessage = 'Unable to reach assistant.';
     

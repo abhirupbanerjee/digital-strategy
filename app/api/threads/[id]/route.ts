@@ -1,4 +1,7 @@
 // app/api/threads/[id]/route.ts
+// used for thread delete option
+
+
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 

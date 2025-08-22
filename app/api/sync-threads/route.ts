@@ -9,6 +9,8 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+const DEBUG_SYNC = process.env.NODE_ENV === 'development' && process.env.DEBUG_SYNC === 'true';
+
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_KEY!
@@ -89,62 +91,47 @@ function generateContextualTitle(messages: any[]): string {
 
   // Define topic keywords and their corresponding titles
   const topicPatterns = [
-    {
-      keywords: ['strategy', 'strategic', 'planning', 'roadmap', 'vision'],
-      title: 'Strategic Planning Discussion'
-    },
-    {
-      keywords: ['digital', 'transformation', 'digitalization', 'modernization'],
-      title: 'Digital Transformation'
-    },
-    {
-      keywords: ['api', 'apis', 'integration', 'endpoint', 'rest', 'graphql'],
-      title: 'API Development'
-    },
-    {
-      keywords: ['database', 'sql', 'query', 'schema', 'migration'],
-      title: 'Database Design'
-    },
-    {
-      keywords: ['security', 'authentication', 'authorization', 'encryption', 'cybersecurity'],
-      title: 'Security Discussion'
-    },
-    {
-      keywords: ['ui', 'ux', 'design', 'interface', 'user experience', 'frontend'],
-      title: 'UI/UX Design'
-    },
-    {
-      keywords: ['performance', 'optimization', 'speed', 'efficiency', 'scalability'],
-      title: 'Performance Optimization'
-    },
-    {
-      keywords: ['testing', 'qa', 'quality assurance', 'unit test', 'integration test'],
-      title: 'Testing & QA'
-    },
-    {
-      keywords: ['deployment', 'devops', 'ci/cd', 'pipeline', 'infrastructure'],
-      title: 'DevOps & Deployment'
-    },
-    {
-      keywords: ['government', 'policy', 'regulation', 'compliance', 'public sector'],
-      title: 'Government Policy Discussion'
-    },
-    {
-      keywords: ['caribbean', 'regional', 'island', 'tourism', 'development'],
-      title: 'Caribbean Development'
-    },
-    {
-      keywords: ['budget', 'cost', 'pricing', 'financial', 'economics'],
-      title: 'Budget Planning'
-    },
-    {
-      keywords: ['project', 'management', 'timeline', 'milestone', 'deadline'],
-      title: 'Project Management'
-    },
-    {
-      keywords: ['research', 'analysis', 'study', 'investigation', 'report'],
-      title: 'Research & Analysis'
-    }
+  { keywords: ['Antigua and Barbuda', 'Antigua', 'Barbuda'], title: 'Antigua and Barbuda' },
+  { keywords: ['Bahamas', 'The Bahamas', 'Commonwealth of The Bahamas'], title: 'Bahamas' },
+  { keywords: ['Barbados'], title: 'Barbados' },
+  { keywords: ['Belize'], title: 'Belize' },
+  { keywords: ['Cuba', 'Republic of Cuba'], title: 'Cuba' },
+  { keywords: ['Dominica', 'Commonwealth of Dominica'], title: 'Dominica' },
+  { keywords: ['Dominican Republic', 'República Dominicana', 'Dominican Rep'], title: 'Dominican Republic' },
+  { keywords: ['Grenada'], title: 'Grenada' },
+  { keywords: ['Guyana', 'Co-operative Republic of Guyana'], title: 'Guyana' },
+  { keywords: ['Haiti', "République d’Haïti", "Republique d'Haiti", 'Ayiti'], title: 'Haiti' },
+  { keywords: ['Jamaica'], title: 'Jamaica' },
+  { keywords: ['Saint Kitts and Nevis', 'St Kitts and Nevis', 'St Kitts', 'Nevis', 'SKN'], title: 'Saint Kitts and Nevis' },
+  { keywords: ['Saint Lucia', 'St Lucia'], title: 'Saint Lucia' },
+  { keywords: ['Saint Vincent and the Grenadines', 'St Vincent and the Grenadines', 'St Vincent', 'SVG'], title: 'Saint Vincent and the Grenadines' },
+  { keywords: ['Suriname', 'Republic of Suriname'], title: 'Suriname' },
+  { keywords: ['Trinidad and Tobago', 'Trinidad', 'Tobago', 'T&T', 'TT'], title: 'Trinidad and Tobago' },
+
+  // Territories & dependencies commonly treated as part of the Caribbean region
+  { keywords: ['Anguilla'], title: 'Anguilla' },
+  { keywords: ['Aruba'], title: 'Aruba' },
+  { keywords: ['Bermuda'], title: 'Bermuda' },
+  { keywords: ['Bonaire'], title: 'Bonaire' },
+  { keywords: ['British Virgin Islands', 'BVI'], title: 'British Virgin Islands' },
+  { keywords: ['Cayman Islands', 'Cayman'], title: 'Cayman Islands' },
+  { keywords: ['Curaçao', 'Curacao'], title: 'Curaçao' },
+  { keywords: ['Guadeloupe'], title: 'Guadeloupe' },
+  { keywords: ['Martinique'], title: 'Martinique' },
+  { keywords: ['Montserrat'], title: 'Montserrat' },
+  { keywords: ['Puerto Rico', 'PR'], title: 'Puerto Rico' },
+  { keywords: ['Saba'], title: 'Saba' },
+  { keywords: ['Saint Barthélemy', 'Saint Barthelemy', 'St Barts', 'St Barths'], title: 'Saint Barthélemy' },
+  { keywords: ['Saint Martin', 'St Martin', 'Saint-Martin (French part)'], title: 'Saint Martin' },
+  { keywords: ['Sint Eustatius', 'Statia'], title: 'Sint Eustatius' },
+  { keywords: ['Sint Maarten', 'St Maarten'], title: 'Sint Maarten' },
+  { keywords: ['Turks and Caicos Islands', 'Turks & Caicos', 'TCI'], title: 'Turks and Caicos Islands' },
+  { keywords: ['United States Virgin Islands', 'U.S. Virgin Islands', 'USVI'], title: 'United States Virgin Islands' },
+  //caribbean combined
+  { keywords: ['caribbean', 'oecs', 'eastern caribbean', 'west indies', 'caricom'],   title: 'Caribbean Region' },
+  // others
+  { keywords: ['Government', 'eGovernment', 'country', 'strategy', 'digital'],   title: 'Others' },
+
   ];
 
   // Check for topic patterns
@@ -173,17 +160,20 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    
-    console.log('Syncing threads for project:', projectId);
-    console.log('Thread IDs to sync:', threadIds);
-    console.log('Generate smart titles:', generateSmartTitles);
+    if (DEBUG_SYNC) {
+      console.log('Syncing threads for project:', projectId);
+      console.log('Thread IDs to sync:', threadIds);
+      console.log('Generate smart titles:', generateSmartTitles);
+    }
     
     const syncResults = [];
     let smartTitlesGenerated = 0;
     
     for (const threadId of threadIds) {
       try {
-        console.log(`Syncing thread: ${threadId}`);
+        if (DEBUG_SYNC) {
+          console.log(`Syncing thread: ${threadId}`);
+        }
         
         // 1. Check if thread already exists in Supabase
         const { data: existingThread } = await supabase
@@ -193,8 +183,9 @@ export async function POST(request: NextRequest) {
           .maybeSingle();
         
         if (existingThread) {
-          console.log(`Thread ${threadId} already exists in database`);
-          
+          if (DEBUG_SYNC) {
+            console.log(`Thread ${threadId} already exists in database`);
+          }
           // Update existing thread with smart title if enabled and current title is generic
           if (generateSmartTitles && 
               (existingThread.title === 'Untitled' || 
@@ -224,7 +215,9 @@ export async function POST(request: NextRequest) {
                 
                 if (!updateError) {
                   smartTitlesGenerated++;
-                  console.log(`Updated existing thread ${threadId} with smart title: "${smartTitle}"`);
+                  if (DEBUG_SYNC) {
+                    console.log(`Updated existing thread ${threadId} with smart title: "${smartTitle}"`);
+                  }
                   syncResults.push({ 
                     threadId, 
                     status: 'title_updated', 
@@ -244,12 +237,15 @@ export async function POST(request: NextRequest) {
         
         // 2. Fetch thread from OpenAI
         const thread = await openai.beta.threads.retrieve(threadId);
-        console.log(`Retrieved OpenAI thread: ${threadId}`);
-        
+        if (DEBUG_SYNC) {
+          console.log(`Retrieved OpenAI thread: ${threadId}`);
+        }
         // 3. Fetch messages from OpenAI
         const messages = await openai.beta.threads.messages.list(threadId);
-        console.log(`Found ${messages.data.length} messages for thread ${threadId}`);
-        
+        if (DEBUG_SYNC) {
+          console.log(`Found ${messages.data.length} messages for thread ${threadId}`);
+        }
+
         // 4. Convert OpenAI messages to our format
         const formattedMessages = messages.data
           .reverse()
@@ -266,7 +262,9 @@ export async function POST(request: NextRequest) {
         if (generateSmartTitles && formattedMessages.length > 0) {
           title = generateContextualTitle(formattedMessages);
           smartTitlesGenerated++;
-          console.log(`Generated smart title for ${threadId}: "${title}"`);
+          if (DEBUG_SYNC) {
+            console.log(`Generated smart title for ${threadId}: "${title}"`);
+          }
         } else {
           // Fallback to first user message processing
           const firstUserMessage = formattedMessages.find(m => m.role === 'user');
@@ -296,7 +294,9 @@ export async function POST(request: NextRequest) {
             error: insertError.message 
           });
         } else {
-          console.log(`Successfully synced thread ${threadId} with title: "${title}"`);
+          if (DEBUG_SYNC) {
+            console.log(`Successfully synced thread ${threadId} with title: "${title}"`);
+          }
           syncResults.push({ 
             threadId, 
             status: 'synced', 
