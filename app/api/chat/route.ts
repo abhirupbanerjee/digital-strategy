@@ -684,12 +684,39 @@ export async function POST(request: NextRequest) {
       content: messageContent
     };
 
-    // CRITICAL: Attach files to the enhanced message, not just the original
-    if (fileIds && fileIds.length > 0) {
-      messageForThread.attachments = fileIds.map((fileId: string) => ({
-        file_id: fileId,
-        tools: [{ type: "file_search" }]
-      }));
+    // Store file types from upload (you'll need to pass this from frontend)
+      interface FileInfo {
+        fileId: string;
+        type: string;
+      }
+
+      // Determine which tool to use based on file type
+      const getToolsForFile = (fileType: string) => {
+        // File types that work with file_search
+        const searchableTypes = ['.pdf', '.txt', '.md', '.docx', '.html', '.json'];
+        
+        // File types that need code_interpreter
+        const codeTypes = ['.xlsx', '.xls', '.csv', '.py', '.js', '.ts'];
+        
+        // Check file extension
+        const extension = fileType.toLowerCase();
+        
+        if (codeTypes.some(ext => extension.includes(ext))) {
+          return [{ type: "code_interpreter" }];
+        } else if (searchableTypes.some(ext => extension.includes(ext))) {
+          return [{ type: "file_search" }];
+        } else {
+          // Default to code_interpreter for unknown types
+          return [{ type: "code_interpreter" }];
+        }
+      };
+
+      // CRITICAL: Attach files with appropriate tools based on file type
+      if (fileIds && fileIds.length > 0) {
+        messageForThread.attachments = fileIds.map((fileId: string) => ({
+          file_id: fileId,
+          tools: [{ type: "code_interpreter" }]  // Use code_interpreter for Excel/CSV files
+        }));
       if (DEBUG) {
       console.log('Files attached to message:', fileIds);
       }
@@ -710,9 +737,22 @@ export async function POST(request: NextRequest) {
       }
     } catch (error: any) {
       console.error('Failed to add message:', error.response?.data || error.message);
+      
+      // Extract detailed error information
+      const errorData = error.response?.data?.error || {};
+      let errorMessage = 'Failed to add message to thread';
+      
+      // Check for file-specific errors
+      if (errorData.code === 'unsupported_file') {
+        errorMessage = `File type error: ${errorData.message}. Using code_interpreter instead of file_search.`;
+        console.log('Switching to code_interpreter for unsupported file types');
+      } else if (errorData.message) {
+        errorMessage = errorData.message;
+      }
+      
       return NextResponse.json(
-        { error: 'Failed to add message to thread' },
-        { status: 500 }
+        { error: errorMessage },
+        { status: error.response?.status || 500 }
       );
     }
 
@@ -730,21 +770,26 @@ export async function POST(request: NextRequest) {
       runConfig.response_format = { type: "json_object" };
     }
 
-    // FIXED: Always include file_search when files are present
+    // Configure tools based on file types and features
     const tools = [];
-    
-    // Always include code_interpreter for general functionality
+
+    // Always include code_interpreter for general functionality and Excel/CSV files
     tools.push({ type: "code_interpreter" });
-    
-    // CRITICAL: Always include file_search when files are uploaded
-    if (fileIds && fileIds.length > 0) {
+
+    // Only include file_search for web search or searchable document types
+    // Don't include it for Excel files as it causes errors
+    if (webSearchEnabled && (!fileIds || fileIds.length === 0)) {
+      // Only add file_search if we're doing web search without files
       tools.push({ type: "file_search" });
       if (DEBUG) {
-      console.log('file_search tool enabled for file processing');
+        console.log('file_search tool enabled for web search');
       }
-    } else if (webSearchEnabled) {
-      // Include file_search for web search integration even without files
-      tools.push({ type: "file_search" });
+    }
+
+    // Note: We're NOT adding file_search when files are present
+    // because Excel files (.xlsx, .xls, .csv) don't support it
+    if (DEBUG && fileIds && fileIds.length > 0) {
+      console.log('Using code_interpreter for file processing (Excel/CSV compatible)');
     }
 
     // Add tools to run configuration

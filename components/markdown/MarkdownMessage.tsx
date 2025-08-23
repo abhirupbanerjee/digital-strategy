@@ -128,26 +128,20 @@ export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({
             </li>
           ),
           table: ({ children, ...props }) => (
-            <div className="table-scroll-container">
-              <table className="w-full border-collapse text-xs md:text-sm" {...props}>
+            <div className="table-scroll-container my-4">
+              <table className="min-w-full" {...props}>
                 {children}
               </table>
             </div>
           ),
           th: ({ children, ...props }) => (
-            <th 
-              className="border-r border-gray-300 px-2 md:px-4 py-1 md:py-3 text-left font-semibold text-gray-900 bg-gray-100 align-top" 
-              title={typeof children === 'string' ? children : undefined}
-              {...props}
-            >
+            <th className="sticky-header" {...props}>
               {children}
             </th>
           ),
           td: ({ children, ...props }) => (
-            <td className="border-r border-gray-300 px-2 md:px-4 py-1 md:py-3 text-gray-700 align-top" {...props}>
-              <div className="break-words min-w-0">
-                {children}
-              </div>
+            <td {...props}>
+              {children}
             </td>
           ),
           blockquote: ({ children, ...props }) => (

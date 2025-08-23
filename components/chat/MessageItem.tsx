@@ -44,7 +44,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           <span className="text-xs text-gray-500">({message.timestamp})</span>
         )}
       </p>
-      <div className={`p-3 rounded-md ${getMessageStyle(message.role)}`}>
+      <div className={`p-3 rounded-md overflow-hidden ${getMessageStyle(message.role)}`}>
         <MarkdownMessage content={message.content} />
         
         {message.files && message.files.length > 0 && (

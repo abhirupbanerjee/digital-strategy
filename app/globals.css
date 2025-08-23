@@ -27,124 +27,8 @@ body {
 
 /* Chat container updates */
 .chat-container {
-  overflow-x: visible; /* Allow table overflow */
-  overflow-y: auto;
-}
-
-.chat-message {
-  word-wrap: break-word;
-  overflow-wrap: break-word;
-  max-width: 100%;
   overflow-x: visible;
-}
-
-/* Protection against long words in regular messages */
-.message-content p,
-.message-content div {
-  word-wrap: break-word;
-  overflow-wrap: break-word;
-  hyphens: auto;
-}
-
-
-/* Enhanced table styling with overflow protection */
-.message-content table {
-  width: 100%;
-  border-collapse: collapse;
-  margin: 1rem 0;
-  background: white;
-  border: 1px solid #d1d5db;
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.message-content table th,
-.message-content table td {
-  padding: 8px 12px;
-  border-right: 1px solid #d1d5db;
-  border-bottom: 1px solid #e5e7eb;
-  text-align: left;
-  vertical-align: top;
-  font-size: 14px;
-  line-height: 1.4;
-  word-wrap: break-word;
-  overflow-wrap: break-word;
-  max-width: 200px; /* Prevent cells from getting too wide */
-}
-
-.message-content table th {
-  background-color: #f9fafb;
-  font-weight: 600;
-  color: #374151;
-  white-space: nowrap;
-  max-width: 150px; /* Shorter headers */
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Table container for safe scrolling */
-.table-scroll-container {
-  width: 100%;
-  overflow-x: auto;
-  overflow-y: visible;
-  -webkit-overflow-scrolling: touch;
-  margin: 1rem 0;
-  /* Add scroll indicators */
-  background: 
-    linear-gradient(90deg, white 30%, transparent),
-    linear-gradient(90deg, transparent, white 70%) 0 100%,
-    radial-gradient(farthest-side at 0 50%, rgba(0,0,0,.2), transparent),
-    radial-gradient(farthest-side at 100% 50%, rgba(0,0,0,.2), transparent) 0 100%;
-  background-repeat: no-repeat;
-  background-size: 40px 100%, 40px 100%, 14px 100%, 14px 100%;
-  background-attachment: local, local, scroll, scroll;
-}
-
-/* Mobile responsive */
-@media (max-width: 768px) {
-  .message-content table {
-    font-size: 12px;
-  }
-  
-  .message-content table th,
-  .message-content table td {
-    padding: 6px 8px;
-    font-size: 12px;
-    line-height: 1.3;
-    max-width: 120px; /* Smaller on mobile */
-  }
-  
-  .message-content table th {
-    max-width: 100px;
-  }
-}
-
-@media (max-width: 480px) {
-  .message-content table th,
-  .message-content table td {
-    padding: 4px 6px;
-    font-size: 11px;
-    max-width: 80px; /* Even smaller on tiny screens */
-  }
-}
-
-.table-scroll-container {
-  overflow-x: auto;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  margin: 1rem 0;
-}
-
-.table-scroll-container table {
-  min-width: 100%;
-  border: none;
-}
-
-.table-scroll-container:hover {
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
-}
-
-.chat-container {
+  overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 #f1f5f9;
 }
@@ -164,4 +48,148 @@ body {
 
 .chat-container::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
+}
+
+/* Message content protection */
+.chat-message {
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+  overflow-x: visible;
+}
+
+.message-content {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.message-content > * {
+  max-width: 100%;
+}
+
+.message-content p,
+.message-content div {
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+
+/* Enhanced table container with better scrolling */
+.table-scroll-container {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
+  margin: 1rem 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: white;
+}
+
+.table-scroll-container table {
+  min-width: 600px;
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0;
+  background: white;
+  border: none;
+}
+
+.table-scroll-container table th,
+.table-scroll-container table td {
+  padding: 8px 12px;
+  border-right: 1px solid #e5e7eb;
+  border-bottom: 1px solid #e5e7eb;
+  text-align: left;
+  vertical-align: top;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: normal;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  min-width: 100px;
+}
+
+.table-scroll-container table th {
+  background-color: #f9fafb;
+  font-weight: 600;
+  color: #374151;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+/* Remove last column border */
+.table-scroll-container table th:last-child,
+.table-scroll-container table td:last-child {
+  border-right: none;
+}
+
+/* Visual scroll indicators */
+.table-scroll-container::-webkit-scrollbar {
+  height: 8px;
+}
+
+.table-scroll-container::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 4px;
+}
+
+.table-scroll-container::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+.table-scroll-container::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Hover effect for better UX */
+.table-scroll-container:hover {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+
+/* Special handling for tables in messages */
+.message-content .table-scroll-container {
+  max-width: calc(100vw - 3rem);
+}
+
+/* Mobile responsive adjustments */
+@media (max-width: 768px) {
+  .table-scroll-container {
+    margin: 0.5rem -1rem;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+  }
+  
+  .table-scroll-container table {
+    min-width: 500px;
+  }
+  
+  .table-scroll-container table th,
+  .table-scroll-container table td {
+    padding: 6px 8px;
+    font-size: 12px;
+    min-width: 80px;
+  }
+  
+  .message-content .table-scroll-container {
+    max-width: 100vw;
+  }
+}
+
+@media (max-width: 480px) {
+  .table-scroll-container table th,
+  .table-scroll-container table td {
+    padding: 4px 6px;
+    font-size: 11px;
+    min-width: 60px;
+  }
+}
+
+@media (min-width: 768px) {
+  .message-content .table-scroll-container {
+    max-width: 100%;
+  }
 }
