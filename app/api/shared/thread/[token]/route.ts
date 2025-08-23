@@ -22,17 +22,7 @@ export async function GET(
     // Get share data with thread info
     const { data: share, error: shareError } = await supabase
       .from('thread_shares')
-      .select(`
-        *,
-        threads!inner(
-          id,
-          title,
-          last_activity,
-          message_count,
-          project_id,
-          projects(id, name, description, color)
-        )
-      `)
+      .select('*')
       .eq('share_token', token)
       .single();
 
@@ -41,6 +31,19 @@ export async function GET(
         { error: 'Share link not found' },
         { status: 404 }
       );
+    }
+
+    // Get thread details separately if needed
+    let threadDetails = null;
+    try {
+      const { data: thread } = await supabase
+        .from('threads')
+        .select('*, projects(*)')
+        .eq('id', share.thread_id)
+        .single();
+      threadDetails = thread;
+    } catch (err) {
+      console.log('Thread not in database, will fetch from OpenAI only');
     }
 
     // Check if expired

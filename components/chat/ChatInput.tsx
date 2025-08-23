@@ -20,11 +20,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   const handleSend = useCallback(async () => {
     if (loading || !input.trim()) return;
-
+    const messageToSend = input.trim();
+    setInput('');
     setLoading(true);
     try {
-      await onSendMessage(input, fileIds);
-      setInput('');
+      await onSendMessage(messageToSend, fileIds);
+      
       clearFiles();
     } catch (error) {
       console.error('Send message error:', error);

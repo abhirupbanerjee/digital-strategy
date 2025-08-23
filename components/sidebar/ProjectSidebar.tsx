@@ -100,15 +100,29 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
 
         {currentProject && (
           <div className="mt-6">
-            <h4 className="text-sm font-medium text-gray-700 mb-2">Recent Chats</h4>
+            <h4 className="text-sm font-medium text-gray-700 mb-2">
+              Recent Chats {threads.filter(t => currentProject.threads.includes(t.id)).length > 0 && 
+                `(${threads.filter(t => currentProject.threads.includes(t.id)).length})`}
+            </h4>
             <ThreadList
-              threads={threads.filter(t => currentProject.threads.includes(t.id))}
+              threads={threads.filter(t => {
+                // Check if thread ID exists in project's thread list
+                if (typeof t.id === 'string' && Array.isArray(currentProject.threads)) {
+                  return currentProject.threads.some(projectThreadId => 
+                    projectThreadId === t.id || 
+                    projectThreadId.includes(t.id) || 
+                    t.id.includes(projectThreadId)
+                  );
+                }
+                return false;
+              })}
               currentThreadId={currentThreadId}
               onSelectThread={onSelectThread}
               onDeleteThread={onDeleteThread}
               onShareThread={onShareThread}
               isMobile={isMobile}
             />
+
             <button
               onClick={onNewChat}
               className="mt-2 w-full text-center text-sm text-blue-600 hover:text-blue-700 py-2"

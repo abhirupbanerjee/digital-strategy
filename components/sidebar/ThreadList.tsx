@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { Thread } from '../../types/entities.types';
 
+
 interface ThreadListProps {
   threads: Thread[];
   currentThreadId: string | null;
@@ -20,23 +21,45 @@ export const ThreadList: React.FC<ThreadListProps> = ({
   isMobile
 }) => {
   const [showDeleteMenu, setShowDeleteMenu] = useState<string | null>(null);
+  const [displayCount, setDisplayCount] = useState(10);
+  
+  // Sort threads by most recent first
+  const sortedThreads = [...threads].sort((a, b) => {
+    const dateA = new Date(a.lastActivity || a.createdAt || 0).getTime();
+    const dateB = new Date(b.lastActivity || b.createdAt || 0).getTime();
+    return dateB - dateA;
+  });
+  
+  const visibleThreads = sortedThreads.slice(0, displayCount);
+  const hasMore = sortedThreads.length > displayCount;
+  const remaining = sortedThreads.length - displayCount;
 
-  return (
-    <div className="space-y-1">
-      {threads.slice(0, 5).map((thread) => (
+
+return (
+    <div>
+      <div className="space-y-1 max-h-[400px] overflow-y-auto">
+        {visibleThreads.map((thread) => (
         <div key={thread.id} className="relative group">
           <button
             onClick={() => onSelectThread(thread.id)}
-            className={`w-full text-left p-2 rounded text-sm ${
+            className={`w-full text-left p-2 rounded text-sm transition-colors ${
               currentThreadId === thread.id
-                ? 'bg-blue-50 text-blue-700'
+                ? 'bg-blue-50 text-blue-700 font-medium'
+                : thread.isNew
+                ? 'bg-green-50 border-l-2 border-green-500'
                 : 'hover:bg-gray-100'
             }`}
+
           >
-            <div className="truncate">{thread.title}</div>
+          <div className="truncate">{thread.title}</div>
+          {thread.lastMessage && thread.lastMessage !== thread.title && (
             <div className="text-xs text-gray-500 truncate">
-              {thread.lastMessage}
+              {thread.lastMessage.length > 50 
+                ? `${thread.lastMessage.substring(0, 50)}...`
+                : thread.lastMessage
+              }
             </div>
+          )}
           </button>
           
           {/* Desktop thread menu */}
@@ -115,6 +138,29 @@ export const ThreadList: React.FC<ThreadListProps> = ({
           )}
         </div>
       ))}
+      {/* Show More/Less buttons */}
+      {sortedThreads.length > 10 && (
+        <div className="mt-2 text-center">
+          {hasMore ? (
+            <button
+              onClick={() => setDisplayCount(prev => prev + 10)}
+              className="text-sm text-blue-600 hover:text-blue-700"
+            >
+              Show {Math.min(remaining, 10)} more threads
+            </button>
+          ) : (
+            displayCount > 10 && (
+              <button
+                onClick={() => setDisplayCount(10)}
+                className="text-sm text-gray-600 hover:text-gray-700"
+              >
+                Show less
+              </button>
+            )
+          )}
+        </div>
+      )}
     </div>
+  </div>
   );
 };

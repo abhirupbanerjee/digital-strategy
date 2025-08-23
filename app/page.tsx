@@ -112,6 +112,8 @@ const ChatApp: React.FC = () => {
           { role: 'user', content: message, timestamp: new Date().toLocaleString() },
           { role: 'assistant', content: response.reply, timestamp: new Date().toLocaleString() }
         ]);
+        // Reload project to show new thread at top
+        await loadProject(currentProject.id);
       }
     } catch (error) {
       console.error('Send message error:', error);
@@ -124,15 +126,23 @@ const ChatApp: React.FC = () => {
   const handleSelectProject = async (project: any) => {
     try {
       const loadedProject = await loadProject(project.id);
+      
+      // Get the actual thread objects from the project
       const { threads: projectThreads } = await ProjectService.getProject(project.id);
       
-      updateThreadsFromProject(projectThreads, project.id);
+      // Update threads with the actual thread data
+      updateThreadsFromProject(projectThreads || [], project.id);
+      
+      // Get unique thread IDs for loading
+      const uniqueThreadIds = loadedProject.threads 
+        ? Array.from(new Set(loadedProject.threads))
+        : [];
       
       // Load first thread if available
-      if (loadedProject.threads.length > 0) {
-        const threadMessages = await loadThread(loadedProject.threads[0]);
+      if (uniqueThreadIds.length > 0) {
+        const threadMessages = await loadThread(uniqueThreadIds[0]);
         setMessagesFromThread(threadMessages);
-        setThreadId(loadedProject.threads[0]);
+        setThreadId(uniqueThreadIds[0]);
       } else {
         clearChat();
       }

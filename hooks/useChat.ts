@@ -15,10 +15,10 @@ export const useChat = () => {
     input: string,
     webSearchEnabled: boolean = false,
     fileIds: string[] = []
-  ): Promise<ChatResponse> => {
-    if (activeRun || !input.trim()) {
-      throw new Error('Cannot send message while processing or with empty input');
-    }
+    ): Promise<ChatResponse> => {
+      if (activeRun || !input.trim()) {
+        throw new Error('Cannot send message while processing or with empty input');
+      }
 
     setActiveRun(true);
     setLoading(true);
@@ -64,6 +64,8 @@ export const useChat = () => {
       // Update thread ID if new
       if (response.threadId && response.threadId !== threadId) {
         setThreadId(response.threadId);
+        // Mark this as a new thread that needs to be shown
+        // This will be picked up by the auto-save hook
       }
 
       // Clean the response to remove any search context

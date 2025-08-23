@@ -53,13 +53,22 @@ export class ProjectService {
     
     if (Array.isArray(data.threads)) {
       threadObjs = data.threads;
-      threadIds = threadObjs.map((t: any) => t.id || t.thread_id || t);
+      threadIds = threadObjs.map((t: any) => {
+        if (typeof t === 'string') return t;
+        return t.id || t.thread_id || t;
+      });
     } else if (data.threads && typeof data.threads === 'object') {
       threadObjs = Object.values(data.threads);
-      threadIds = threadObjs.map((t: any) => t.id || t.thread_id || t);
+      threadIds = threadObjs.map((t: any) => {
+        if (typeof t === 'string') return t;
+        return t.id || t.thread_id || t;
+      });
     } else if (data.thread_ids && Array.isArray(data.thread_ids)) {
       threadIds = data.thread_ids;
     }
+
+    // Remove duplicate thread IDs
+    threadIds = Array.from(new Set(threadIds));
     
     // Normalize the project data with extracted thread IDs
     const project = normalizeProject({

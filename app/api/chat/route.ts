@@ -509,32 +509,20 @@ export async function POST(request: NextRequest) {
 
     // Validate share token if provided
     if (shareToken) {
-      const { data: share, error: shareError } = await supabase
-        .from('project_shares')
-        .select('permissions, expires_at, project_id')
+      const { data: share } = await supabase
+        .from('thread_shares')
+        .select('permissions, expires_at, thread_id')
         .eq('share_token', shareToken)
         .single();
-
-      if (shareError || !share) {
-        return NextResponse.json(
-          { error: 'Invalid share token' },
-          { status: 403 }
-        );
+        
+      if (!share || new Date(share.expires_at) < new Date()) {
+        return NextResponse.json({ error: 'Invalid or expired share' }, { status: 403 });
       }
-
-      if (new Date(share.expires_at) < new Date()) {
-        return NextResponse.json(
-          { error: 'Share link has expired' },
-          { status: 410 }
-        );
-      }
-
+      
       if (share.permissions !== 'collaborate') {
-        return NextResponse.json(
-          { error: 'This share link is read-only' },
-          { status: 403 }
-        );
+        return NextResponse.json({ error: 'Read-only access' }, { status: 403 });
       }
+
     }
 
     // Environment check

@@ -47,7 +47,13 @@ export const useThreads = () => {
 
       await ThreadService.saveThread({ ...thread, messages });
       
-      setThreads(prev => [...prev.filter(t => t.id !== threadId), thread]);
+      setThreads(prev => {
+        // Remove any existing thread with same ID
+        const filtered = prev.filter(t => t.id !== threadId);
+        // Add the new/updated thread
+        return [...filtered, thread];
+      });
+      
       
       return thread;
     } catch (error) {
@@ -66,21 +72,54 @@ export const useThreads = () => {
     }
   }, []);
 
-  const updateThreadsFromProject = useCallback((projectThreads: any[], projectId: string) => {
-    const newThreads = projectThreads.map((t: any) => ({
-      id: t.id || t.thread_id,
+const updateThreadsFromProject = useCallback((projectThreads: any[], projectId: string) => {
+const newThreads = projectThreads.map((t: any) => {
+  // Handle both string IDs and thread objects
+  if (typeof t === 'string') {
+    // If t is just a thread ID string, create minimal thread object
+    return {
+      id: t,
       projectId,
-      title: t.title || t.name || 'Untitled',
-      lastMessage: t.lastMessage || t.last_message || '',
-      createdAt: t.createdAt || t.created_at || new Date().toISOString()
-    })).filter(t => t.id);
+      title: 'Loading...',
+      lastMessage: '',
+      createdAt: new Date().toISOString(),
+      lastActivity: new Date().toISOString()
+    };
+  }
+  
+  // If t is an object, map the properties
+  const title = t.title || t.name || 'Untitled';
+  const lastMessage = t.last_message || t.lastMessage || '';
+  
+  return {
+    id: t.id || t.thread_id,
+    projectId,
+    title: title,
+    lastMessage: lastMessage !== title ? lastMessage : '', // Avoid duplicate display
+    createdAt: t.created_at || t.createdAt || new Date().toISOString(),
+    lastActivity: t.last_activity || t.lastActivity || t.created_at || new Date().toISOString()
+  };
+}).filter(t => t.id);
+  
+  setThreads(prev => {
+    // Create a Map to ensure unique threads by ID
+    const threadMap = new Map<string, Thread>();
     
-    setThreads(prev => {
-      const threadIds = newThreads.map(t => t.id);
-      const filteredPrev = prev.filter(t => !threadIds.includes(t.id));
-      return [...filteredPrev, ...newThreads];
+    // Add new threads to map (these take priority)
+    newThreads.forEach(thread => {
+      threadMap.set(thread.id, thread);
     });
-  }, []);
+    
+    // Only add previous threads that aren't in the new set and belong to different projects
+    prev.forEach((thread: Thread) => {
+      if (!threadMap.has(thread.id) && thread.projectId !== projectId) {
+        threadMap.set(thread.id, thread);
+      }
+    });
+    
+    return Array.from(threadMap.values());
+  });
+}, []);
 
   return {
     threads,

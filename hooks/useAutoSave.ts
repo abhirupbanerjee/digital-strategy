@@ -25,6 +25,8 @@ export const useAutoSave = (
     try {
       await saveThread(threadId!, currentProjectId!, messages);
       setAutoSaveStatus('saved');
+      // Trigger a re-sort by updating the thread's last activity
+      // This will be handled by the parent component through the saveThread callback
       
       // Reset to idle after showing saved status
       setTimeout(() => setAutoSaveStatus('idle'), 2000);

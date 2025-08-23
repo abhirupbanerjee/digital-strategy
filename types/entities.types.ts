@@ -28,6 +28,9 @@ export interface Thread {
   title: string;
   lastMessage?: string;
   createdAt: string;
+  lastActivity?: string;
+  isSaved?: boolean;
+  isNew?: boolean;
 }
 
 export interface ShareLink {
