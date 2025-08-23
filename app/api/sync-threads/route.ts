@@ -91,6 +91,8 @@ function generateContextualTitle(messages: any[]): string {
 
   // Define topic keywords and their corresponding titles
   const topicPatterns = [
+
+
   { keywords: ['Antigua and Barbuda', 'Antigua', 'Barbuda'], title: 'Antigua and Barbuda' },
   { keywords: ['Bahamas', 'The Bahamas', 'Commonwealth of The Bahamas'], title: 'Bahamas' },
   { keywords: ['Barbados'], title: 'Barbados' },
@@ -127,18 +129,46 @@ function generateContextualTitle(messages: any[]): string {
   { keywords: ['Sint Maarten', 'St Maarten'], title: 'Sint Maarten' },
   { keywords: ['Turks and Caicos Islands', 'Turks & Caicos', 'TCI'], title: 'Turks and Caicos Islands' },
   { keywords: ['United States Virgin Islands', 'U.S. Virgin Islands', 'USVI'], title: 'United States Virgin Islands' },
+  
   //caribbean combined
-  { keywords: ['caribbean', 'oecs', 'eastern caribbean', 'west indies', 'caricom'],   title: 'Caribbean Region' },
-  // others
-  { keywords: ['Government', 'eGovernment', 'country', 'strategy', 'digital'],   title: 'Others' },
+  { keywords: ['caribbean', 'oecs', 'SIDS', 'west indies', 'caricom'],   title: 'Caribbean Region' },
+  
+    // Other samples for test cases
+    { keywords: ['India', 'Republic of India', 'Bharat'],       title: 'India' },
+      { keywords: ['Australia', 'Commonwealth of Australia', 'AUS'], title: 'Australia' },
+  { keywords: ['Austria', 'Österreich', 'Republic of Austria'], title: 'Austria' },
+  { keywords: ['Belgium', 'Kingdom of Belgium', 'Belgique', 'België', 'Belgie'], title: 'Belgium' },
+  { keywords: ['Canada', 'CA'], title: 'Canada' },
+  { keywords: ['Estonia', 'Republic of Estonia', 'Eesti'], title: 'Estonia' },
+  { keywords: ['Finland', 'Republic of Finland', 'Suomi', 'FI'], title: 'Finland' },
+  { keywords: ['France', 'French Republic', 'République française', 'FR'], title: 'France' },
+  { keywords: ['Germany', 'Federal Republic of Germany', 'Deutschland', 'DE'], title: 'Germany' },
+  { keywords: ['Ireland', 'Republic of Ireland', 'Éire', 'IE'], title: 'Ireland' },
+  { keywords: ['Japan', 'Nippon', 'Nihon', 'JP'], title: 'Japan' },
+  { keywords: ['Netherlands', 'The Netherlands', 'Kingdom of the Netherlands', 'Holland', 'NL'], title: 'Netherlands' },
+  { keywords: ['New Zealand', 'Aotearoa', 'NZ'], title: 'New Zealand' },
+  { keywords: ['Norway', 'Kingdom of Norway', 'NO'], title: 'Norway' },
+  { keywords: ['Singapore', 'Republic of Singapore', 'SG'], title: 'Singapore' },
+  { keywords: ['South Korea', 'Republic of Korea', 'ROK', 'Korea, South', 'KR'], title: 'South Korea' },
+  { keywords: ['Spain', 'España', 'Kingdom of Spain', 'ES'], title: 'Spain' },
+  { keywords: ['Sweden', 'Kingdom of Sweden', 'Sverige', 'SE'], title: 'Sweden' },
+  { keywords: ['United Kingdom', 'UK', 'U.K.', 'Britain', 'Great Britain', 'GB', 'England', 'Scotland', 'Wales', 'Northern Ireland'], title: 'United Kingdom' },
+  { keywords: ['United States', 'USA', 'U.S.A.', 'US', 'U.S.', 'United States of America', 'America'], title: 'United States' },
+
+
+      // Digital Strategy
+  { keywords: ['digital transformation strategy', 'digital', 'egovernment strategy', 'government digital strategy'], title: 'Digital Strategy' },
+
+
+  // Keep this LAST — treat as a fallback in your matching logic
+  { keywords: ['__ANY__'], title: 'General' }
 
   ];
 
-  // Check for topic patterns
-  const allText = userMessages.join(' ');
+  const allText = userMessages.join(' ').toLowerCase(); // Convert to lowercase once
   for (const pattern of topicPatterns) {
     const matchCount = pattern.keywords.reduce((count, keyword) => {
-      return count + (allText.includes(keyword) ? 1 : 0);
+      return count + (allText.includes(keyword.toLowerCase()) ? 1 : 0);
     }, 0);
     
     if (matchCount >= 1) {
