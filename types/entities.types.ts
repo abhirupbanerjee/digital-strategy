@@ -11,6 +11,7 @@ export interface MessageFile {
   file_id?: string;
   url?: string;
   description: string;
+  blob_url?: string; // ADDED: Support for Vercel Blob storage URLs
 }
 
 export interface Project {
