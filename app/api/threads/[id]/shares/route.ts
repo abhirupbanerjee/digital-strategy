@@ -14,6 +14,7 @@ function generateShareToken(): string {
 }
 
 // Create thread share
+// Create thread share - SIMPLIFIED VERSION
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
@@ -21,20 +22,14 @@ export async function POST(
   try {
     const params = await context.params;
     const { id } = params;
-    const { permissions, expiryDays } = await request.json();
 
     if (!id) {
       return NextResponse.json({ error: 'Thread ID is required' }, { status: 400 });
     }
 
-    if (!permissions || !['read', 'collaborate'].includes(permissions)) {
-      return NextResponse.json({ error: 'Valid permissions required' }, { status: 400 });
-    }
-
-    const days = expiryDays || 1;
-    if (days < 1 || days > 30) {
-      return NextResponse.json({ error: 'Expiry days must be between 1 and 30' }, { status: 400 });
-    }
+    // Simple defaults - no user input needed
+    const permissions = 'collaborate'; // Always collaborate
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // Always 1 day
 
     // Verify thread exists (check both database and OpenAI)
     try {
@@ -60,18 +55,23 @@ export async function POST(
       return NextResponse.json({ error: 'Thread verification failed' }, { status: 500 });
     }
 
-    // Generate share token and expiry
-    const shareToken = generateShareToken();
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + days);
+    // AUTO-CLEANUP: Delete any existing shares for this thread first
+    // This ensures only one active share per thread
+    await supabase
+      .from('thread_shares')
+      .delete()
+      .eq('thread_id', id);
 
-    // Create share record
+    // Generate new share token
+    const shareToken = generateShareToken();
+
+    // Create single new share record
     const { data: share, error } = await supabase
       .from('thread_shares')
       .insert({
         thread_id: id,
         share_token: shareToken,
-        permissions,
+        permissions: 'collaborate',
         expires_at: expiresAt.toISOString()
       })
       .select()
@@ -89,9 +89,10 @@ export async function POST(
     return NextResponse.json({
       shareToken,
       shareUrl,
-      permissions,
+      permissions: 'collaborate',
       expiresAt: share.expires_at,
-      createdAt: share.created_at
+      createdAt: share.created_at,
+      message: 'Share link created successfully. Previous links for this thread have been deactivated.'
     });
 
   } catch (error) {

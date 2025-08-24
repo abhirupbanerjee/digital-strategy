@@ -212,26 +212,7 @@ const ChatApp: React.FC = () => {
     }
   };
 
-  const handleSyncThreads = async (projectId: string, threadIds: string[]) => {
-    try {
-      const response = await ProjectService.syncThreads(projectId, threadIds);
-      
-      const message = `Thread Sync Complete!\n\n` +
-        `Total: ${response.totalThreads}\n` +
-        `Synced: ${response.synced}\n` +
-        `Smart Titles Generated: ${response.smartTitlesGenerated || response.synced}\n` +
-        `Errors: ${response.errors}`;
-      
-      alert(message);
-      
-      if (response.synced > 0) {
-        await loadProject(projectId);
-      }
-    } catch (error) {
-      console.error('Sync error:', error);
-      alert(`Failed to sync threads: ${formatErrorMessage(error)}`);
-    }
-  };
+
 
   const handleNewChat = () => {
     clearChat();
@@ -266,7 +247,6 @@ const ChatApp: React.FC = () => {
         onDeleteThread={handleDeleteThread}
         onShareThread={openThreadShareModal}
         onNewChat={handleNewChat}
-        onSyncThreads={handleSyncThreads}
       />
 
       {/* Main Chat Area */}

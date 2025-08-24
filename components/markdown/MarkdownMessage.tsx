@@ -150,37 +150,52 @@ export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({
             </blockquote>
           ),
           img: ({ src, alt, ...props }) => {
-            if (!src || (typeof src === 'string' && src.trim() === '')) {
-              return <span className="text-gray-500 italic">[Image not available]</span>;
-            }
-            
-            if (typeof src === 'string' && src.startsWith('/api/files/')) {
-              return (
-                <div className="my-2 p-2 border rounded bg-gray-50">
-                  <span className="text-sm text-gray-600">📎 {alt || 'Download File'}</span>
-                  <a 
-                    href={src}
-                    download
-                    className="ml-2 text-blue-600 hover:text-blue-800 underline text-sm"
-                  >
-                    Download
-                  </a>
-                </div>
-              );
-            }
-            
-            return (
-              <img 
-                src={src} 
-                alt={alt || ''} 
-                className="max-w-full h-auto rounded border"
-                onError={(e) => {
-                  e.currentTarget.style.display = 'none';
-                }}
-                {...props}
-              />
-            );
-          },
+  if (!src || (typeof src === 'string' && src.trim() === '')) {
+    return <span className="text-gray-500 italic">[Image not available]</span>;
+  }
+  
+    if (typeof src === 'string' && src.startsWith('/api/files/')) {
+      // For files that are actually images, render them as images
+      return (
+        <div className="my-4">
+          <img 
+            src={src} 
+            alt={alt || 'Generated Image'} 
+            className="max-w-full h-auto rounded border shadow-sm"
+            onError={(e) => {
+              // Fallback to download link if image fails to load
+              const parent = e.currentTarget.parentElement;
+              if (parent) {
+                parent.innerHTML = `
+                  <div class="my-2 p-3 border rounded bg-gray-50">
+                    <span class="text-sm text-gray-600">📊 ${alt || 'Generated File'}</span>
+                    <a href="${src}" download target="_blank" 
+                      class="ml-2 text-blue-600 hover:text-blue-800 underline text-sm">
+                      Download
+                    </a>
+                  </div>
+                `;
+              }
+            }}
+            {...props}
+          />
+        </div>
+      );
+    }
+    
+    return (
+      <img 
+        src={src} 
+        alt={alt || ''} 
+        className="max-w-full h-auto rounded border"
+        onError={(e) => {
+          e.currentTarget.style.display = 'none';
+        }}
+        {...props}
+      />
+    );
+  },
+
           strong: ({ children, ...props }) => (
             <strong className="font-semibold text-gray-900" {...props}>
               {children}

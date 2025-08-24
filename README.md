@@ -7,13 +7,18 @@ A modern, AI-powered chat application specifically designed for government consu
 ### 🗂️ Project-Based Organization
 - **Structured Conversations**: Organize related chats into projects with custom colors and descriptions
 - **Thread Management**: Multiple conversation threads within each project
-- **Smart Titles**: AI-generated contextual titles based on conversation content (Caribbean country detection)
+- **Paginated Thread Display**: Shows 10 threads initially with "Show More" functionality
+- **Auto-save**: New threads automatically saved and appear at top of list
+- **Date-based Sorting**: Threads sorted by most recent activity
+- **Smart Titles**: AI-generated contextual titles based on conversation content
 - **Auto-sync**: Sync existing OpenAI assistant threads into your project database
 
 ### 🤖 Advanced AI Capabilities
 - **OpenAI GPT Integration**: Powered by OpenAI's Assistant API with GPT-4
 - **Real-time Web Search**: Tavily API integration for current information
 - **Comprehensive File Support**: PDF, DOC, PPT, Excel, CSV, Images, TXT (up to 20MB)
+  - Uses OpenAI's code_interpreter for Excel/CSV analysis
+  - Supports multiple file uploads in a single message
 - **Intelligent File Processing**: Automatic file analysis and content extraction
 - **Response Formatting**: Default, bullet points, tables, or preserve existing structures
 
@@ -36,6 +41,7 @@ A modern, AI-powered chat application specifically designed for government consu
 - **Responsive Layout**: Adaptive design for all screen sizes
 - **Desktop Features**: Advanced sidebar, keyboard shortcuts, and multi-panel layout
 - **Real-time Updates**: Live typing indicators and message status
+- **Progressive Web App**: Installable on mobile devices
 
 ## 🏗️ Architecture Overview
 
@@ -64,30 +70,6 @@ A modern, AI-powered chat application specifically designed for government consu
 - **Lucide React**: Modern icon library
 - **Remark GFM**: GitHub Flavored Markdown support
 - **Custom Components**: Project-specific UI elements
-
-
-## 📱 User Interface
-
-### Desktop Interface
-- **Three-Panel Layout**: Projects sidebar, thread list, main chat area
-- **Collapsible Sidebar**: Toggle project panel visibility
-- **Advanced Controls**: Keyboard shortcuts (Shift+Enter for new line, Ctrl+Enter for quick actions)
-- **File Management**: Drag-and-drop file upload with preview
-- **Multi-Tab Support**: Open multiple threads in tabs (planned)
-- **Storage Dashboard**: Full metrics and management interface at `/dashboard`
-
-### Mobile Interface
-- **Single-Column Layout**: Optimized for touch interaction
-- **Slide-Out Sidebar**: Swipe or tap to access projects
-- **Simplified Controls**: Large touch targets, minimal UI
-- **Contextual Actions**: Three-dot menus for thread/project options
-- **Responsive Tables**: Horizontal scrolling for data tables
-- **Quick Actions**: Bottom navigation for common tasks
-
-### Responsive Breakpoints
-- **Mobile**: < 768px (simplified UI, touch-optimized)
-- **Tablet**: 768px - 1024px (hybrid layout)
-- **Desktop**: > 1024px (full feature set)
 
 ### Complete File Structure
 
@@ -217,7 +199,28 @@ digital-strategy-bot/
 └── .env.local                    # Environment variables (not tracked)
 ```
 
+## 📱 User Interface
 
+### Desktop Interface
+- **Three-Panel Layout**: Projects sidebar, thread list, main chat area
+- **Collapsible Sidebar**: Toggle project panel visibility
+- **Advanced Controls**: Keyboard shortcuts (Shift+Enter for new line, Ctrl+Enter for quick actions)
+- **File Management**: Drag-and-drop file upload with preview
+- **Multi-Tab Support**: Open multiple threads in tabs (planned)
+- **Storage Dashboard**: Full metrics and management interface at `/dashboard`
+
+### Mobile Interface
+- **Single-Column Layout**: Optimized for touch interaction
+- **Slide-Out Sidebar**: Swipe or tap to access projects
+- **Simplified Controls**: Large touch targets, minimal UI
+- **Contextual Actions**: Three-dot menus for thread/project options
+- **Responsive Tables**: Horizontal scrolling with sticky headers
+- **Quick Actions**: Bottom navigation for common tasks
+
+### Responsive Breakpoints
+- **Mobile**: < 768px (simplified UI, touch-optimized)
+- **Tablet**: 768px - 1024px (hybrid layout)
+- **Desktop**: > 1024px (full feature set)
 
 ## 🔌 API Endpoints
 
@@ -243,6 +246,8 @@ digital-strategy-bot/
 - `GET /api/threads/[id]/shares` - List thread share links
 - `DELETE /api/threads/[id]/shares?token=[token]` - Revoke share
 - `POST /api/threads/[id]/download` - Generate ZIP export
+- `POST /api/sync-threads` - Sync existing OpenAI threads with smart titles
+  - Supports batch import with contextual title generation
 
 ### File Endpoints
 - `POST /api/upload` - Upload file to OpenAI
@@ -257,7 +262,6 @@ digital-strategy-bot/
 - `GET /api/vercel-storage/download/[fileKey]` - Direct blob download
 
 ### Utility Endpoints
-- `POST /api/sync-threads` - Sync OpenAI threads with smart titles
 - `POST /api/cleanup-threads` - Clean search artifacts from messages
 - `POST /api/search` - Perform web search (Tavily API)
 - `GET /api/shared/[token]` - Validate project share token
@@ -403,7 +407,7 @@ CREATE TABLE storage_metrics (
 ## 🚀 Quick Start Guide
 
 ### Prerequisites
-- Node.js 18+ and npm/yarn
+- Node.js 20+ (Node.js 18 is deprecated for Supabase compatibility)
 - OpenAI API account with Assistant configured
 - Supabase project with tables created
 - Tavily API key (optional, for web search)
@@ -489,7 +493,9 @@ npm start
 
 ### Smart Title Generation
 - **Context Analysis**: Analyzes first 3 substantial user messages
-- **Caribbean Detection**: Recognizes all Caribbean countries and territories
+- **Caribbean Detection**: Recognizes all Caribbean countries and territories (case-insensitive)
+- **Improved Accuracy**: Fixed country detection for general queries
+- **Dual Implementation**: Consistent logic in both sync and real-time generation
 - **Topic Patterns**: Identifies government, digital strategy topics
 - **Fallback Logic**: Graceful handling of edge cases
 - **Multi-language**: Supports various input formats
@@ -506,7 +512,6 @@ npm start
 - **Responsive Tables**: Horizontal scrolling for large tables
 - **Gesture Support**: Swipe and touch-friendly controls
 - **Offline Viewing**: Cached conversations available offline
-- **Progressive Web App**: Installable on mobile devices
 
 ### Storage Management
 - **Usage Dashboard**: Real-time storage metrics at `/dashboard`
@@ -514,6 +519,17 @@ npm start
 - **File Deduplication**: Prevents duplicate file storage
 - **Access Tracking**: Last accessed timestamps for cleanup prioritization
 - **Manual Controls**: Force cleanup and metrics recalculation
+
+## ⚠️ Known Limitations
+
+### File Type Restrictions
+- Excel files (.xlsx, .xls) and CSV files use `code_interpreter` tool only
+- These files cannot use OpenAI's `file_search` tool
+- PDF and text documents support both tools
+
+### Thread Display
+- Maximum 10 threads shown initially per project
+- Use "Show More" to view additional threads in increments of 10
 
 ## 🛠️ Development Guidelines
 
@@ -523,6 +539,11 @@ npm start
 - **API Standards**: RESTful API design with proper error handling
 - **State Management**: React hooks with local state
 - **Service Layer**: Abstracted API calls for maintainability
+
+### CSS Architecture
+- **Table Handling**: Dedicated `.table-scroll-container` for responsive tables
+- **Sticky Headers**: Position sticky on table headers for better navigation
+- **Mobile Optimization**: Edge-to-edge tables on mobile devices
 
 ### Performance Optimization
 - **Server Components**: Leverage Next.js 15 server components
@@ -547,6 +568,11 @@ npm start
 - Verify supported file types
 - Ensure OpenAI API key has file permissions
 - Check Vercel Blob token validity
+
+**Excel File Upload Issues**
+- Excel files require `code_interpreter` tool, not `file_search`
+- If upload fails with "unsupported_file" error, check tool configuration
+- Supported: .xlsx, .xls, .csv for data analysis
 
 **Thread Sync Issues**
 - Verify OpenAI Assistant ID
@@ -591,8 +617,6 @@ This project is licensed under the MIT License. See LICENSE file for details.
 For questions, issues, or feature requests:
 - **Issues**: GitHub Issues tracker
 - **Documentation**: This README and inline code comments
-
+- **Community**: Project discussions
 
 ---
-
-**Built with ❤️ for Caribbean Digital Transformation**

@@ -19,7 +19,7 @@ interface ProjectSidebarProps {
   onDeleteProject: (projectId: string) => void;
   onDeleteThread: (threadId: string) => void;
   onNewChat: () => void;
-  onSyncThreads?: (projectId: string, threadIds: string[]) => void;
+  //onSyncThreads?: (projectId: string, threadIds: string[]) => void;
   onShareThread?: (thread: { id: string; title: string }) => void;
 }
 
@@ -38,7 +38,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   onDeleteThread,
   onShareThread,
   onNewChat,
-  onSyncThreads
+  //onSyncThreads
 }) => {
   const sidebarContent = (
     <div className="flex flex-col h-full">
@@ -53,14 +53,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
             >
               + New
             </button>
-            {currentProject && !isMobile && onSyncThreads && (
-              <button
-                onClick={() => onSyncThreads(currentProject.id, currentProject.threads)}
-                className="text-green-600 hover:text-green-700 text-sm"
-              >
-                🔄 Sync
-              </button>
-            )}
+
             {isMobile && (
               <button
                 onClick={onClose}

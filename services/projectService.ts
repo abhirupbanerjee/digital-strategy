@@ -88,16 +88,4 @@ export class ProjectService {
     });
   }
 
-  static async syncThreads(projectId: string, threadIds: string[]): Promise<any> {
-    const response = await baseFetch('/api/sync-threads', {
-      method: 'POST',
-      body: JSON.stringify({ 
-        projectId, 
-        threadIds, 
-        generateSmartTitles: true 
-      }),
-    });
-    
-    return response.json();
-  }
 }

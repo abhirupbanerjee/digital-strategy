@@ -2,152 +2,302 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import archiver from 'archiver';
-import puppeteer from 'puppeteer';
-import { Readable } from 'stream';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_KEY!
 );
 
-// Generate HTML for PDF conversion
-function generateThreadHTML(threadTitle: string, messages: any[], files: any[]): string {
-  const messagesHTML = messages.map(msg => `
-    <div class="message ${msg.role}">
-      <div class="message-header">
-        <strong>${msg.role === 'user' ? 'User' : 'Digital Strategy Bot'}</strong>
-        <span class="timestamp">${msg.timestamp || new Date().toLocaleString()}</span>
+// Generate clean, professional HTML for the conversation
+function generateConversationHTML(threadTitle: string, messages: any[], files: any[]): string {
+  const messagesHTML = messages.map(msg => {
+    const roleClass = msg.role === 'user' ? 'user-message' : 'assistant-message';
+    const roleName = msg.role === 'user' ? 'You' : 'Digital Strategy Bot';
+    
+    return `
+      <div class="message ${roleClass}">
+        <div class="message-header">
+          <div class="role-name">${roleName}</div>
+          <div class="timestamp">${msg.timestamp || new Date().toLocaleString()}</div>
+        </div>
+        <div class="message-content">
+          ${msg.content
+            .replace(/\n/g, '<br>')
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+            .replace(/`(.*?)`/g, '<code>$1</code>')
+            .replace(/### (.*?)(\n|$)/g, '<h3>$1</h3>')
+            .replace(/## (.*?)(\n|$)/g, '<h2>$1</h2>')
+            .replace(/# (.*?)(\n|$)/g, '<h1>$1</h1>')
+          }
+        </div>
       </div>
-      <div class="message-content">
-        ${msg.content.replace(/\n/g, '<br>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')}
-      </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
 
   const filesHTML = files.length > 0 ? `
     <div class="files-section">
-      <h3>Referenced Files</h3>
-      <ul>
+      <h2>📎 Referenced Files</h2>
+      <div class="files-grid">
         ${files.map(file => `
-          <li>
-            <strong>${file.filename}</strong> 
-            <span class="file-info">(${(file.file_size / 1024 / 1024).toFixed(2)} MB, ${file.content_type})</span>
-            <br>
-            <a href="${file.vercel_blob_url}" target="_blank">Download: ${file.vercel_blob_url}</a>
-          </li>
+          <div class="file-item">
+            <div class="file-header">
+              <span class="file-icon">${getFileIconForHTML(file.content_type)}</span>
+              <span class="file-name">${file.filename}</span>
+            </div>
+            <div class="file-details">
+              <span class="file-size">${(file.file_size / 1024 / 1024).toFixed(2)} MB</span>
+              <span class="file-type">${file.content_type}</span>
+            </div>
+            <div class="file-location">
+              📁 See annexures/${file.filename}
+            </div>
+          </div>
         `).join('')}
-      </ul>
+      </div>
     </div>
   ` : '';
 
   return `
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
-      <meta charset="utf-8">
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>${threadTitle}</title>
       <style>
-        body {
-          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-          line-height: 1.6;
-          color: #333;
-          max-width: 800px;
-          margin: 0 auto;
-          padding: 20px;
+        * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
         }
+        
+        body {
+          font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+          line-height: 1.6;
+          color: #1f2937;
+          background: #ffffff;
+          max-width: 900px;
+          margin: 0 auto;
+          padding: 2rem;
+        }
+        
         .header {
           text-align: center;
-          border-bottom: 2px solid #eee;
-          padding-bottom: 20px;
-          margin-bottom: 30px;
+          margin-bottom: 3rem;
+          padding-bottom: 2rem;
+          border-bottom: 3px solid #e5e7eb;
         }
+        
         .header h1 {
-          color: #2563eb;
-          margin-bottom: 10px;
+          font-size: 2.5rem;
+          font-weight: 700;
+          color: #1e40af;
+          margin-bottom: 1rem;
         }
+        
         .header .subtitle {
-          color: #666;
-          font-size: 14px;
+          color: #6b7280;
+          font-size: 1.1rem;
         }
+        
+        .conversation {
+          margin-bottom: 3rem;
+        }
+        
         .message {
-          margin-bottom: 25px;
-          padding: 15px;
-          border-radius: 8px;
-          border-left: 4px solid #e5e7eb;
+          margin-bottom: 2rem;
+          border-radius: 12px;
+          overflow: hidden;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
         }
-        .message.user {
-          background-color: #f3f4f6;
-          border-left-color: #6b7280;
+        
+        .user-message {
+          background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
+          border-left: 5px solid #6b7280;
         }
-        .message.assistant {
-          background-color: #fefefe;
-          border-left-color: #2563eb;
+        
+        .assistant-message {
+          background: linear-gradient(135deg, #ffffff 0%, #f9fafb 100%);
+          border-left: 5px solid #2563eb;
           border: 1px solid #e5e7eb;
         }
+        
         .message-header {
           display: flex;
           justify-content: space-between;
-          margin-bottom: 10px;
-          font-size: 14px;
+          align-items: center;
+          padding: 1rem 1.5rem 0.5rem 1.5rem;
+          background: rgba(255, 255, 255, 0.5);
         }
-        .message-header strong {
-          color: #1f2937;
+        
+        .role-name {
+          font-weight: 600;
+          font-size: 1.1rem;
+          color: #374151;
         }
+        
         .timestamp {
+          font-size: 0.875rem;
           color: #6b7280;
-          font-size: 12px;
+          font-family: 'SF Mono', 'Monaco', monospace;
         }
+        
         .message-content {
-          font-size: 14px;
+          padding: 0.5rem 1.5rem 1.5rem 1.5rem;
+          font-size: 1rem;
           line-height: 1.7;
         }
+        
+        .message-content h1, .message-content h2, .message-content h3 {
+          margin: 1rem 0 0.5rem 0;
+          color: #1e40af;
+        }
+        
+        .message-content h1 { font-size: 1.5rem; }
+        .message-content h2 { font-size: 1.3rem; }
+        .message-content h3 { font-size: 1.1rem; }
+        
+        .message-content strong {
+          font-weight: 600;
+          color: #111827;
+        }
+        
+        .message-content em {
+          font-style: italic;
+          color: #4b5563;
+        }
+        
+        .message-content code {
+          background: #f3f4f6;
+          color: #dc2626;
+          padding: 0.2rem 0.4rem;
+          border-radius: 4px;
+          font-family: 'SF Mono', 'Monaco', monospace;
+          font-size: 0.9rem;
+        }
+        
         .files-section {
-          margin-top: 40px;
-          padding-top: 20px;
-          border-top: 2px solid #eee;
+          margin-top: 3rem;
+          padding-top: 2rem;
+          border-top: 3px solid #e5e7eb;
         }
-        .files-section h3 {
-          color: #2563eb;
-          margin-bottom: 15px;
+        
+        .files-section h2 {
+          font-size: 1.8rem;
+          color: #1e40af;
+          margin-bottom: 1.5rem;
+          font-weight: 600;
         }
-        .files-section ul {
-          list-style: none;
-          padding: 0;
+        
+        .files-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+          gap: 1rem;
         }
-        .files-section li {
-          margin-bottom: 15px;
-          padding: 10px;
-          background-color: #f9fafb;
-          border-radius: 6px;
+        
+        .file-item {
+          background: #f9fafb;
+          border: 1px solid #e5e7eb;
+          border-radius: 8px;
+          padding: 1rem;
+          transition: all 0.2s ease;
         }
-        .file-info {
+        
+        .file-item:hover {
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+          transform: translateY(-2px);
+        }
+        
+        .file-header {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          margin-bottom: 0.5rem;
+        }
+        
+        .file-icon {
+          font-size: 1.5rem;
+        }
+        
+        .file-name {
+          font-weight: 600;
+          color: #374151;
+          word-break: break-word;
+        }
+        
+        .file-details {
+          display: flex;
+          gap: 1rem;
+          margin-bottom: 0.5rem;
+          font-size: 0.875rem;
           color: #6b7280;
-          font-size: 12px;
         }
-        .files-section a {
-          color: #2563eb;
-          text-decoration: none;
-          font-size: 12px;
-          word-break: break-all;
+        
+        .file-location {
+          font-size: 0.875rem;
+          color: #059669;
+          font-weight: 500;
         }
-        .disclaimer {
-          position: fixed;
-          bottom: 20px;
-          left: 0;
-          right: 0;
+        
+        .footer {
+          margin-top: 3rem;
+          padding-top: 2rem;
+          border-top: 2px solid #e5e7eb;
           text-align: center;
-          font-size: 10px;
           color: #6b7280;
-          background: white;
-          padding: 10px;
-          border-top: 1px solid #e5e7eb;
+          font-size: 0.875rem;
         }
-        @page {
-          margin: 1in;
-          @bottom-center {
-            content: "This is AI generated material and should be independently verified before use in decision-making. Page " counter(page) " of " counter(pages);
-            font-size: 10px;
-            color: #6b7280;
+        
+        .disclaimer {
+          background: #fef3c7;
+          border: 1px solid #f59e0b;
+          border-radius: 8px;
+          padding: 1rem;
+          margin-top: 1rem;
+          font-size: 0.875rem;
+          color: #92400e;
+        }
+        
+        /* Print styles */
+        @media print {
+          body {
+            padding: 1rem;
+            max-width: none;
+          }
+          
+          .header h1 {
+            font-size: 2rem;
+          }
+          
+          .message {
+            break-inside: avoid;
+            margin-bottom: 1rem;
+          }
+          
+          .files-section {
+            break-inside: avoid;
+          }
+        }
+        
+        /* Mobile styles */
+        @media (max-width: 768px) {
+          body {
+            padding: 1rem;
+          }
+          
+          .header h1 {
+            font-size: 2rem;
+          }
+          
+          .message-header {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.5rem;
+          }
+          
+          .files-grid {
+            grid-template-columns: 1fr;
           }
         }
       </style>
@@ -156,18 +306,47 @@ function generateThreadHTML(threadTitle: string, messages: any[], files: any[]):
       <div class="header">
         <h1>${threadTitle}</h1>
         <div class="subtitle">
-          Conversation Export • Generated on ${new Date().toLocaleDateString()}
+          Digital Strategy Bot Conversation Export<br>
+          Generated on ${new Date().toLocaleDateString('en-US', { 
+            year: 'numeric', 
+            month: 'long', 
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          })}
         </div>
       </div>
       
-      <div class="messages">
+      <div class="conversation">
         ${messagesHTML}
       </div>
       
       ${filesHTML}
+      
+      <div class="footer">
+        <div class="disclaimer">
+          ⚠️ <strong>Important:</strong> This is AI-generated content and should be independently verified before use in decision-making or policy development.
+        </div>
+        <div style="margin-top: 1rem;">
+          Exported from Digital Strategy Bot • Generated for Caribbean Government Digital Transformation
+        </div>
+      </div>
     </body>
     </html>
   `;
+}
+
+// Helper function to get appropriate file icon for HTML
+function getFileIconForHTML(contentType: string): string {
+  if (contentType.includes('pdf')) return '📄';
+  if (contentType.includes('word') || contentType.includes('document')) return '📝';
+  if (contentType.includes('excel') || contentType.includes('spreadsheet')) return '📊';
+  if (contentType.includes('powerpoint') || contentType.includes('presentation')) return '📋';
+  if (contentType.includes('image')) return '🖼️';
+  if (contentType.includes('csv')) return '📈';
+  if (contentType.includes('json')) return '🔗';
+  if (contentType.includes('text')) return '📄';
+  return '📎';
 }
 
 export async function POST(
@@ -176,13 +355,15 @@ export async function POST(
 ) {
   try {
     const params = await context.params;
-    const { id:threadId } = params;
+    const { id: threadId } = params;
 
     if (!threadId) {
       return NextResponse.json({ error: 'Thread ID is required' }, { status: 400 });
     }
 
-    // 1. Get thread messages
+    console.log(`Generating HTML + ZIP export for thread: ${threadId}`);
+
+    // 1. Get thread messages from OpenAI
     let messages = [];
     let threadTitle = 'Conversation Export';
     
@@ -203,12 +384,13 @@ export async function POST(
                 if (item.type === 'text') {
                   let text = item.text?.value || '';
                   
-                  // Handle file annotations
+                  // Handle file annotations - replace with clean references
                   if (item.text?.annotations) {
                     for (const annotation of item.text.annotations) {
                       if (annotation.type === 'file_path' && annotation.file_path?.file_id) {
                         const fileId = annotation.file_path.file_id;
-                        text = text.replace(annotation.text, `[File: ${fileId}]`);
+                        // Replace sandbox URLs with clean file references
+                        text = text.replace(annotation.text, `[📎 File: ${fileId} - See annexures folder]`);
                       }
                     }
                   }
@@ -227,105 +409,166 @@ export async function POST(
           };
         });
 
-      // Generate thread title from first user message
-      const firstUserMessage = messages.find(m => m.role === 'user');
+      // Generate smart title from first meaningful user message
+      const firstUserMessage = messages.find(m => m.role === 'user' && m.content.length > 10);
       if (firstUserMessage) {
-        threadTitle = firstUserMessage.content.substring(0, 50).replace(/[^a-zA-Z0-9\s]/g, '').trim() || 'Conversation Export';
+        threadTitle = firstUserMessage.content
+          .substring(0, 60)
+          .replace(/[^\w\s]/g, '')
+          .trim() || 'Digital Strategy Conversation';
       }
       
     } catch (error) {
       console.error('Error fetching thread messages:', error);
-      return NextResponse.json({ error: 'Failed to fetch thread messages' }, { status: 500 });
+      return NextResponse.json({ 
+        error: 'Failed to fetch conversation. Thread may have expired.' 
+      }, { status: 500 });
     }
 
-    // 2. Get thread files from blob_files table
-    const { data: threadFiles } = await supabase
+    // 2. Get thread files from Supabase
+    const { data: threadFiles, error: filesError } = await supabase
       .from('blob_files')
       .select('*')
       .eq('thread_id', threadId);
 
-    const files = threadFiles || [];
-
-    // 3. Generate PDF using Puppeteer
-    let pdfBuffer: Buffer;
-    
-    try {
-      const browser = await puppeteer.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-      });
-      
-      const page = await browser.newPage();
-      const html = generateThreadHTML(threadTitle, messages, files);
-      
-      await page.setContent(html, { waitUntil: 'networkidle0' });
-      
-      pdfBuffer = await page.pdf({
-        format: 'A4',
-        printBackground: true,
-        margin: {
-          top: '1in',
-          right: '1in',
-          bottom: '1in',
-          left: '1in'
-        }
-      });
-      
-      await browser.close();
-      
-    } catch (error) {
-      console.error('PDF generation error:', error);
-      return NextResponse.json({ error: 'Failed to generate PDF' }, { status: 500 });
+    if (filesError) {
+      console.warn('Error fetching thread files:', filesError);
     }
 
-    // 4. Create ZIP with PDF and files
-    const archive = archiver('zip', { zlib: { level: 9 } });
-    const chunks: Buffer[] = [];
+    const files = threadFiles || [];
+    console.log(`Found ${files.length} files for thread ${threadId}`);
 
-    // Handle archive data
-    archive.on('data', (chunk) => chunks.push(chunk));
+    // 3. Generate professional HTML
+    const htmlContent = generateConversationHTML(threadTitle, messages, files);
+
+    // 4. Create ZIP archive with better error handling
+    const archive = archiver('zip', { 
+      zlib: { level: 9 }, // Maximum compression
+      comment: `Digital Strategy Bot Export - ${new Date().toISOString()}`
+    });
     
-    // Add PDF to ZIP
-    archive.append(pdfBuffer, { name: 'chat-conversation.pdf' });
+    const chunks: Buffer[] = [];
+    let archiveError: Error | null = null;
 
-    // Add files to annexures folder
+    // Handle archive events
+    archive.on('error', (err) => {
+      console.error('Archive error:', err);
+      archiveError = err;
+    });
+
+    archive.on('data', (chunk) => {
+      chunks.push(chunk);
+    });
+
+    // 5. Add HTML file to ZIP
+    archive.append(Buffer.from(htmlContent, 'utf-8'), { 
+      name: 'conversation.html',
+      //comment: 'Main conversation export in HTML format'
+    });
+
+    // 6. Add files to annexures folder with better error handling
     if (files.length > 0) {
+      console.log('Adding files to ZIP...');
+      
       for (const file of files) {
         try {
-          // Download file from Vercel Blob
-          const fileResponse = await fetch(file.vercel_blob_url);
-          if (fileResponse.ok) {
-            const fileBuffer = await fileResponse.arrayBuffer();
-            archive.append(Buffer.from(fileBuffer), { 
-              name: `annexures/${file.filename}` 
-            });
+          console.log(`Downloading file: ${file.filename}`);
+          
+          // Download file from Vercel Blob with timeout
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+          
+          const fileResponse = await fetch(file.vercel_blob_url, {
+            signal: controller.signal
+          });
+          
+          clearTimeout(timeoutId);
+          
+          if (!fileResponse.ok) {
+            console.warn(`Failed to download ${file.filename}: ${fileResponse.status}`);
+            // Add error placeholder instead of failing completely
+            archive.append(
+              Buffer.from(`File download failed: ${file.filename}\nOriginal URL: ${file.vercel_blob_url}`, 'utf-8'),
+              { name: `annexures/ERROR_${file.filename}.txt` }
+            );
+            continue;
           }
+          
+          const fileBuffer = await fileResponse.arrayBuffer();
+          
+          // Add file to ZIP with proper path
+          archive.append(Buffer.from(fileBuffer), { 
+            name: `annexures/${file.filename}`,
+            //comment: `Original file: ${file.content_type}, ${(file.file_size / 1024 / 1024).toFixed(2)}MB`
+          });
+          
+          console.log(`Added to ZIP: ${file.filename}`);
+          
         } catch (fileError) {
-          console.error(`Error downloading file ${file.filename}:`, fileError);
-          // Continue with other files even if one fails
+          console.error(`Error processing file ${file.filename}:`, fileError);
+          
+          // Add error placeholder
+          archive.append(
+            Buffer.from(`Error downloading file: ${file.filename}\nError: ${fileError}\nOriginal URL: ${file.vercel_blob_url}`, 'utf-8'),
+            { name: `annexures/ERROR_${file.filename}.txt` }
+          );
         }
       }
     }
 
-    // Finalize archive
-    await archive.finalize();
+    // 7. Finalize archive
+    try {
+      await archive.finalize();
+      
+      if (archiveError) {
+        throw archiveError;
+      }
+      
+    } catch (finalizeError) {
+      console.error('Archive finalization error:', finalizeError);
+      return NextResponse.json({ 
+        error: 'Failed to create ZIP archive' 
+      }, { status: 500 });
+    }
 
-    // Combine all chunks
+    // 8. Check if archive was created successfully
+    if (chunks.length === 0) {
+      return NextResponse.json({ 
+        error: 'ZIP generation failed - no content created' 
+      }, { status: 500 });
+    }
+
+    // 9. Combine chunks and create response
     const zipBuffer = Buffer.concat(chunks);
-
-    // Return ZIP file
-    const fileName = `thread-${threadId.substring(0, 8)}.zip`;
+    const fileName = `${threadTitle.replace(/[^\w\s-]/g, '').replace(/\s+/g, '-')}-${threadId.substring(0, 8)}.zip`;
     
+    console.log(`ZIP created successfully: ${fileName} (${(zipBuffer.length / 1024 / 1024).toFixed(2)}MB)`);
+    
+    // 10. Return ZIP file with proper headers
     return new NextResponse(zipBuffer, {
       headers: {
         'Content-Type': 'application/zip',
         'Content-Disposition': `attachment; filename="${fileName}"`,
         'Content-Length': zipBuffer.length.toString(),
+        'Cache-Control': 'no-cache',
+        'X-Export-Type': 'html-zip',
+        'X-Files-Count': files.length.toString(),
+        'X-Messages-Count': messages.length.toString(),
       },
     });
 
   } catch (error) {
     console.error('Thread download error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    
+    // Enhanced error response
+    const errorMessage = error instanceof Error 
+      ? error.message 
+      : 'Unknown error occurred during export';
+      
+    return NextResponse.json({ 
+      error: 'Export generation failed',
+      details: errorMessage,
+      timestamp: new Date().toISOString()
+    }, { status: 500 });
   }
 }
