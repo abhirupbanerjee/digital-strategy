@@ -244,6 +244,7 @@ function getContentTypeFromFilename(filename: string): string {
 }
 
 // Enhanced extractTextFromOpenAI response with Vercel Blob integration
+// Enhanced extractTextFromOpenAI response with Vercel Blob integration
 async function extractTextFromOpenAIResponse(
   assistantMsg: any, 
   threadId: string
@@ -326,10 +327,11 @@ async function extractTextFromOpenAIResponse(
                     files[existingFileIndex].description = description;
                   }
                   
-                  // Still replace the sandbox URL in text
+                  // FIXED: Use blob URL from existing file if available, fallback to API route
                   const sandboxUrl = annotation.text;
-                  const downloadUrl = `/api/files/${fileId}`;
-                  textContent = textContent.replace(sandboxUrl, downloadUrl);
+                  const existingFile = files.find(f => f.file_id === fileId);
+                  const actualDownloadUrl = existingFile?.blob_url || `/api/files/${fileId}`;
+                  textContent = textContent.replace(sandboxUrl, actualDownloadUrl);
                   continue;
                 }
                 
@@ -345,8 +347,6 @@ async function extractTextFromOpenAIResponse(
                   fileId, 
                   description
                 );
-                
-                let downloadUrl = `/api/files/${fileId}`;
                 
                 if (blobResult) {
                   // Store mapping in Supabase
@@ -375,9 +375,10 @@ async function extractTextFromOpenAIResponse(
                   });
                 }
 
-                // REPLACE SANDBOX LINK WITH PROPER DOWNLOAD LINK
+                // FIXED: Replace sandbox link with blob URL if available, fallback to API route
                 const sandboxUrl = annotation.text;
-                textContent = textContent.replace(sandboxUrl, downloadUrl);
+                const actualDownloadUrl = blobResult ? blobResult.blobUrl : `/api/files/${fileId}`;
+                textContent = textContent.replace(sandboxUrl, actualDownloadUrl);
               }
             }
           }
@@ -444,6 +445,7 @@ async function extractTextFromOpenAIResponse(
     return { type: 'text', content: 'Error processing assistant response.' };
   }
 }
+
 
 // Helper function to parse JSON response from assistant
 function parseAssistantJsonResponse(responseText: string): any {

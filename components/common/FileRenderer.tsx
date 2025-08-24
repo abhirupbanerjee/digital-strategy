@@ -10,34 +10,35 @@ interface FileRendererProps {
 
 export const FileRenderer: React.FC<FileRendererProps> = ({ file, isMobile = false }) => {
   const isImage = file.type === 'image' || file.type === 'image_url';
-  const downloadUrl = file.file_id ? `/api/files/${file.file_id}` : file.url;
-  const previewUrl = file.file_id ? `/api/files/${file.file_id}?preview=true` : file.url;
   
-const handleDownload = (e: React.MouseEvent) => {
-  e.preventDefault();
+  // FIXED: Priority order for download URL - blob_url first, then API route, then file.url fallback
+  const downloadUrl = file.blob_url || (file.file_id ? `/api/files/${file.file_id}` : file.url);
+  const previewUrl = file.blob_url || (file.file_id ? `/api/files/${file.file_id}?preview=true` : file.url);
+  
+  const handleDownload = (e: React.MouseEvent) => {
+    e.preventDefault();
 
-  const url = downloadUrl?.trim();
-  if (!url) {
-    console.error('No download URL available');
-    return; // stop early if undefined/empty
-  }
+    const url = downloadUrl?.trim();
+    if (!url) {
+      console.error('No download URL available');
+      return; // stop early if undefined/empty
+    }
 
-  const link = document.createElement('a');
-  link.href = url; // now definitely a string
-  link.download = (file?.description?.trim() || 'download');
-  link.target = '_blank';
-  link.rel = 'noopener noreferrer';
+    const link = document.createElement('a');
+    link.href = url; // now definitely a string
+    link.download = (file?.description?.trim() || 'download');
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
 
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
 
-  // Optional: clean up blob URLs
-  if (url.startsWith('blob:')) {
-    setTimeout(() => URL.revokeObjectURL(url), 0);
-  }
-};
-
+    // Optional: clean up blob URLs
+    if (url.startsWith('blob:')) {
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+  };
 
   return (
     <div className="border rounded-lg p-3 mb-2 bg-gray-50">
