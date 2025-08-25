@@ -1,4 +1,5 @@
 // app/api/threads/route.ts
+
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
@@ -24,6 +25,9 @@ function safeCleanWithPlaceholders(text: string): string {
     /sandbox:\/\/[^\/]+\/[^\s\)]+/g,                         // OpenAI sandbox URLs
     /\[([^\]]+)\]\(sandbox:\/\/[^\)]+\)/g,                   // Markdown sandbox links
     /file-[a-zA-Z0-9]{24,}/g,                                // OpenAI file IDs
+    // ADDED: Support for blob URLs
+    /https:\/\/[a-zA-Z0-9]+\.public\.blob\.vercel-storage\.com\/[^\s\)]+/g,
+    /\[([^\]]+)\]\(https:\/\/[a-zA-Z0-9]+\.public\.blob\.vercel-storage\.com\/[^\)]+\)/g,
   ];
   
   patterns.forEach(pattern => {
@@ -58,9 +62,29 @@ function safeCleanWithPlaceholders(text: string): string {
   return working;
 }
 
-// Helper to process OpenAI message content and handle annotations
-function processOpenAIContent(content: any[]): string {
+// ENHANCED: Process OpenAI content with blob URL lookup
+async function processOpenAIContentWithBlobSupport(content: any[], threadId: string): Promise<{text: string, files: any[]}> {
   let processedText = '';
+  const files: any[] = [];
+  const processedFileIds = new Set<string>();
+  
+  // First, get all blob file mappings for this thread in one query
+  const { data: blobFiles } = await supabase
+    .from('blob_files')
+    .select('openai_file_id, vercel_blob_url, filename, content_type')
+    .eq('thread_id', threadId);
+  
+  // Create a lookup map for quick access
+  const blobLookup = new Map();
+  if (blobFiles) {
+    blobFiles.forEach(bf => {
+      blobLookup.set(bf.openai_file_id, {
+        blob_url: bf.vercel_blob_url,
+        description: bf.filename,
+        content_type: bf.content_type
+      });
+    });
+  }
   
   for (const item of content) {
     if (item.type === 'text') {
@@ -72,8 +96,31 @@ function processOpenAIContent(content: any[]): string {
           if (annotation.type === 'file_path' && annotation.file_path?.file_id) {
             const fileId = annotation.file_path.file_id;
             const sandboxUrl = annotation.text;
-            const downloadUrl = `/api/files/${fileId}`;
-            text = text.replace(sandboxUrl, downloadUrl);
+            
+            // ENHANCED: Check blob lookup first, fallback to API route
+            const blobInfo = blobLookup.get(fileId);
+            const actualDownloadUrl = blobInfo ? blobInfo.blob_url : `/api/files/${fileId}`;
+            
+            // Replace in text
+            text = text.replace(sandboxUrl, actualDownloadUrl);
+            
+            // Add to files array if not already processed
+            if (!processedFileIds.has(fileId)) {
+              processedFileIds.add(fileId);
+              
+              // Get description from text or use filename
+              const linkPattern = /\[([^\]]+)\]\([^)]+\)/;
+              const textAround = text.substring(Math.max(0, text.indexOf(sandboxUrl) - 100), text.indexOf(sandboxUrl) + 100);
+              const linkMatch = textAround.match(linkPattern);
+              const description = linkMatch ? linkMatch[1] : (blobInfo ? blobInfo.description : 'Generated File');
+              
+              files.push({
+                type: 'file',
+                file_id: fileId,
+                description: description,
+                blob_url: blobInfo ? blobInfo.blob_url : undefined
+              });
+            }
           }
         }
       }
@@ -81,11 +128,26 @@ function processOpenAIContent(content: any[]): string {
       processedText += text;
     } else if (item.type === 'image_file' && item.image_file?.file_id) {
       const fileId = item.image_file.file_id;
-      processedText += `\n[Image: /api/files/${fileId}]\n`;
+      
+      // Check for blob URL for images too
+      const blobInfo = blobLookup.get(fileId);
+      const imageUrl = blobInfo ? blobInfo.blob_url : `/api/files/${fileId}`;
+      
+      processedText += `\n[Image: ${imageUrl}]\n`;
+      
+      if (!processedFileIds.has(fileId)) {
+        processedFileIds.add(fileId);
+        files.push({
+          type: 'image',
+          file_id: fileId,
+          description: 'Generated Image',
+          blob_url: blobInfo ? blobInfo.blob_url : undefined
+        });
+      }
     }
   }
   
-  return processedText;
+  return { text: processedText, files };
 }
 
 export async function GET(request: NextRequest) {
@@ -106,32 +168,38 @@ export async function GET(request: NextRequest) {
       // Get messages from OpenAI
       const messages = await openai.beta.threads.messages.list(threadId);
       
-      // Convert OpenAI messages to our format with proper file handling
-      const formattedMessages = messages.data
-        .reverse() // OpenAI returns newest first, we want oldest first
-        .map((msg: any) => {
-          let content = '';
-          
-          // Handle different content types
-          if (Array.isArray(msg.content)) {
-            content = processOpenAIContent(msg.content);
-          } else if (msg.content && typeof msg.content === 'object') {
-            // Handle single content item or other structures
-            content = JSON.stringify(msg.content);
-          } else {
-            // Fallback for any other format
-            content = String(msg.content || '');
-          }
-          
-          // Clean the content while preserving file links
-          const cleanedContent = safeCleanWithPlaceholders(content);
-          
-          return {
-            role: msg.role,
-            content: cleanedContent,
-            timestamp: new Date(msg.created_at * 1000).toLocaleString()
-          };
-        });
+      // ENHANCED: Convert OpenAI messages to our format with blob URL support
+      const formattedMessages = await Promise.all(
+        messages.data
+          .reverse() // OpenAI returns newest first, we want oldest first
+          .map(async (msg: any) => {
+            let content = '';
+            let messageFiles: any[] = [];
+            
+            // Handle different content types
+            if (Array.isArray(msg.content)) {
+              const result = await processOpenAIContentWithBlobSupport(msg.content, threadId);
+              content = result.text;
+              messageFiles = result.files;
+            } else if (msg.content && typeof msg.content === 'object') {
+              // Handle single content item or other structures
+              content = JSON.stringify(msg.content);
+            } else {
+              // Fallback for any other format
+              content = String(msg.content || '');
+            }
+            
+            // Clean the content while preserving file links
+            const cleanedContent = safeCleanWithPlaceholders(content);
+            
+            return {
+              role: msg.role,
+              content: cleanedContent,
+              files: messageFiles.length > 0 ? messageFiles : undefined, // ADDED: Include files array
+              timestamp: new Date(msg.created_at * 1000).toLocaleString()
+            };
+          })
+      );
 
       return NextResponse.json({
         threadId: threadId,
