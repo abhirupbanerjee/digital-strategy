@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
 import { put } from '@vercel/blob';
+import { ThreadFileService } from '../../../services/threadFileService';
 
 const ASSISTANT_ID = process.env.OPENAI_ASSISTANT_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -244,7 +245,6 @@ function getContentTypeFromFilename(filename: string): string {
 }
 
 // Enhanced extractTextFromOpenAI response with Vercel Blob integration
-// Enhanced extractTextFromOpenAI response with Vercel Blob integration
 async function extractTextFromOpenAIResponse(
   assistantMsg: any, 
   threadId: string
@@ -446,7 +446,6 @@ async function extractTextFromOpenAIResponse(
   }
 }
 
-
 // Helper function to parse JSON response from assistant
 function parseAssistantJsonResponse(responseText: string): any {
   try {
@@ -524,7 +523,6 @@ export async function POST(request: NextRequest) {
       if (share.permissions !== 'collaborate') {
         return NextResponse.json({ error: 'Read-only access' }, { status: 403 });
       }
-
     }
 
     // Environment check
@@ -583,6 +581,25 @@ export async function POST(request: NextRequest) {
           { error: 'Failed to create thread' },
           { status: 500 }
         );
+      }
+    }
+
+    // ========================================
+    // NEW: Get existing thread files for persistence
+    // ========================================
+    let existingThreadFiles: string[] = [];
+    
+    if (currentThreadId) {
+      try {
+        const activeFiles = await ThreadFileService.getActiveThreadFiles(currentThreadId);
+        existingThreadFiles = activeFiles.map(file => file.openai_file_id);
+        
+        if (DEBUG && existingThreadFiles.length > 0) {
+          console.log(`Found ${existingThreadFiles.length} existing thread files:`, existingThreadFiles);
+        }
+      } catch (error) {
+        console.error('Error retrieving thread files:', error);
+        // Continue without existing files rather than failing
       }
     }
 
@@ -665,7 +682,7 @@ export async function POST(request: NextRequest) {
     }
     
     // ========================================
-    // FIXED: Single message with proper file attachment
+    // UPDATED: Combine new uploads with existing thread files
     // ========================================
     
     // Prepare the SINGLE message for the thread with both content and files
@@ -686,41 +703,57 @@ export async function POST(request: NextRequest) {
       content: messageContent
     };
 
+    // ========================================
+    // CRITICAL: Combine new uploads with existing thread files
+    // ========================================
+    
+    // Combine new file uploads with existing thread files
+    const newFileIds = fileIds || [];
+    const allFileIds = [...new Set([...newFileIds, ...existingThreadFiles])]; // Remove duplicates
+    
+    if (DEBUG) {
+      console.log(`File attachment summary:
+        - New uploads: ${newFileIds.length} files
+        - Existing thread files: ${existingThreadFiles.length} files
+        - Total files to attach: ${allFileIds.length} files`);
+    }
+
     // Store file types from upload (you'll need to pass this from frontend)
-      interface FileInfo {
-        fileId: string;
-        type: string;
+    interface FileInfo {
+      fileId: string;
+      type: string;
+    }
+
+    // Determine which tool to use based on file type
+    const getToolsForFile = (fileType: string) => {
+      // File types that work with file_search
+      const searchableTypes = ['.pdf', '.txt', '.md', '.docx', '.html', '.json'];
+      
+      // File types that need code_interpreter
+      const codeTypes = ['.xlsx', '.xls', '.csv', '.py', '.js', '.ts'];
+      
+      // Check file extension
+      const extension = fileType.toLowerCase();
+      
+      if (codeTypes.some(ext => extension.includes(ext))) {
+        return [{ type: "code_interpreter" }];
+      } else if (searchableTypes.some(ext => extension.includes(ext))) {
+        return [{ type: "file_search" }];
+      } else {
+        // Default to code_interpreter for unknown types
+        return [{ type: "code_interpreter" }];
       }
+    };
 
-      // Determine which tool to use based on file type
-      const getToolsForFile = (fileType: string) => {
-        // File types that work with file_search
-        const searchableTypes = ['.pdf', '.txt', '.md', '.docx', '.html', '.json'];
-        
-        // File types that need code_interpreter
-        const codeTypes = ['.xlsx', '.xls', '.csv', '.py', '.js', '.ts'];
-        
-        // Check file extension
-        const extension = fileType.toLowerCase();
-        
-        if (codeTypes.some(ext => extension.includes(ext))) {
-          return [{ type: "code_interpreter" }];
-        } else if (searchableTypes.some(ext => extension.includes(ext))) {
-          return [{ type: "file_search" }];
-        } else {
-          // Default to code_interpreter for unknown types
-          return [{ type: "code_interpreter" }];
-        }
-      };
-
-      // CRITICAL: Attach files with appropriate tools based on file type
-      if (fileIds && fileIds.length > 0) {
-        messageForThread.attachments = fileIds.map((fileId: string) => ({
-          file_id: fileId,
-          tools: [{ type: "code_interpreter" }]  // Use code_interpreter for Excel/CSV files
-        }));
+    // CRITICAL: Attach ALL files (new + existing) with appropriate tools
+    if (allFileIds.length > 0) {
+      messageForThread.attachments = allFileIds.map((fileId: string) => ({
+        file_id: fileId,
+        tools: [{ type: "code_interpreter" }]  // Use code_interpreter for Excel/CSV files
+      }));
+      
       if (DEBUG) {
-      console.log('Files attached to message:', fileIds);
+        console.log('Total files attached to message:', allFileIds);
       }
     }
 
@@ -780,7 +813,7 @@ export async function POST(request: NextRequest) {
 
     // Only include file_search for web search or searchable document types
     // Don't include it for Excel files as it causes errors
-    if (webSearchEnabled && (!fileIds || fileIds.length === 0)) {
+    if (webSearchEnabled && (!allFileIds || allFileIds.length === 0)) {
       // Only add file_search if we're doing web search without files
       tools.push({ type: "file_search" });
       if (DEBUG) {
@@ -790,7 +823,7 @@ export async function POST(request: NextRequest) {
 
     // Note: We're NOT adding file_search when files are present
     // because Excel files (.xlsx, .xls, .csv) don't support it
-    if (DEBUG && fileIds && fileIds.length > 0) {
+    if (DEBUG && allFileIds && allFileIds.length > 0) {
       console.log('Using code_interpreter for file processing (Excel/CSV compatible)');
     }
 
@@ -798,11 +831,15 @@ export async function POST(request: NextRequest) {
     runConfig.tools = tools;
 
     // Enhanced instructions for file processing
-    if (fileIds && fileIds.length > 0) {
+    if (allFileIds && allFileIds.length > 0) {
       let instructions = "You have access to uploaded files. Please analyze the file content carefully and provide specific, detailed responses based on the actual content.";
       
       if (webSearchEnabled && searchSources.length > 0) {
         instructions += " You also have access to current web search results. Combine information from both the uploaded files and web search when relevant.";
+      }
+      
+      if (existingThreadFiles.length > 0) {
+        instructions += ` Note: Some files were uploaded in previous messages and are still available for reference (${existingThreadFiles.length} existing files).`;
       }
       
       runConfig.additional_instructions = instructions;
@@ -935,7 +972,7 @@ const assistantMsg = recentMessages[0] || messagesRes.data.data.find((m: any) =>
           }
           
           // Clean up any remaining citation markers or artifacts
-          reply = reply.replace(/【\d+:\d+†[^】]+】/g, '');
+          reply = reply.replace(/ã€\d+:\d+â€ [^ã€']+ã€'/g, '');
           reply = reply.replace(/\[sandbox:.*?\]/g, '');
           
           // Clean up search artifacts from the response
@@ -976,6 +1013,79 @@ const assistantMsg = recentMessages[0] || messagesRes.data.data.find((m: any) =>
       extractedResponse = { type: 'text', content: reply };
     }
 
+    // ========================================
+    // NEW: Update thread file tracking after successful response
+    // ========================================
+    
+    if (status === 'completed' && currentThreadId) {
+      try {
+        // Add new files to thread context
+        if (newFileIds.length > 0) {
+          // For each new file, we should get proper metadata from OpenAI
+          for (const fileId of newFileIds) {
+            try {
+              // Get file metadata from OpenAI API
+              const fileMetadataResponse = await fetch(`https://api.openai.com/v1/files/${fileId}`, {
+                headers: {
+                  'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                  'OpenAI-Organization': OPENAI_ORGANIZATION || '',
+                },
+              });
+              
+              let filename = `uploaded-${Date.now()}`;
+              let fileSize = 0;
+              let fileType = 'unknown';
+              
+              if (fileMetadataResponse.ok) {
+                const metadata = await fileMetadataResponse.json();
+                filename = metadata.filename || filename;
+                fileSize = metadata.bytes || 0;
+                // Extract file type from filename extension
+                const extension = filename.toLowerCase().split('.').pop();
+                fileType = extension || 'unknown';
+              }
+              
+              await ThreadFileService.addFileToThread(
+                currentThreadId,
+                fileId,
+                filename,
+                fileType,
+                fileSize
+              );
+              
+            } catch (fileError) {
+              console.error(`Error processing file ${fileId}:`, fileError);
+              // Still try to add with fallback data
+              await ThreadFileService.addFileToThread(
+                currentThreadId,
+                fileId,
+                `file-${Date.now()}`,
+                'unknown',
+                0
+              );
+            }
+          }
+          
+          if (DEBUG) {
+            console.log(`Added ${newFileIds.length} new files to thread context`);
+          }
+        }
+        
+        // Update usage statistics for all accessed files
+        if (allFileIds.length > 0) {
+          await ThreadFileService.updateFileUsage(currentThreadId, allFileIds);
+          
+          if (DEBUG) {
+            console.log(`Updated usage statistics for ${allFileIds.length} thread files`);
+          }
+        }
+        
+      } catch (error) {
+        console.error('Error updating thread file context:', error);
+        // Don't fail the response due to tracking errors
+      }
+    }
+
     // Now build the response object with the correct extracted data
     const responseObj: any = {
       reply,
@@ -1010,7 +1120,6 @@ const assistantMsg = recentMessages[0] || messagesRes.data.data.find((m: any) =>
         responseObj.searchSources = searchSources;
       }
     }
-
 
     return NextResponse.json(responseObj);
 

@@ -43,6 +43,30 @@ export interface ShareLink {
   shareUrl: string;
 }
 
+// ADDED: Thread file context interfaces
+export interface ThreadFileContext {
+  id: string;
+  thread_id: string;
+  file_id: string;
+  original_filename: string;
+  file_type: string;
+  file_size: number;
+  relevance_score: number;
+  last_used: string;
+  usage_count: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface ActiveThreadFile {
+  openai_file_id: string;
+  filename: string;
+  file_type: string;
+  file_size: number;
+  last_used: string;
+  usage_count: number;
+}
+
 // types/api.types.ts
 export interface ApiResponse<T = any> {
   data?: T;
@@ -68,4 +92,3 @@ export interface ThreadResponse {
   threads?: Thread[];
   messages?: Message[];
 }
-
