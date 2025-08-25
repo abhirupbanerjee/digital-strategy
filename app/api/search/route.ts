@@ -160,6 +160,9 @@ export async function POST(request: NextRequest) {
     // Create run with the assistant
     console.log('Creating run with assistant...');
     let runId;
+    // Store creation timestamp for message filtering
+    const runCreatedAt = Date.now();
+    
     try {
       const runRes = await axios.post(
         `https://api.openai.com/v1/threads/${currentThreadId}/runs`,
@@ -174,7 +177,7 @@ export async function POST(request: NextRequest) {
         { headers }
       );
       runId = runRes.data.id;
-      console.log('Run created:', runId);
+      console.log(`Run created at ${runCreatedAt}: ${runId}`);
     } catch (error: any) {
       console.error('Run creation failed:', error.response?.data || error.message);
       return NextResponse.json(
@@ -186,7 +189,7 @@ export async function POST(request: NextRequest) {
     // Poll for completion
     let status = 'in_progress';
     let retries = 0;
-    const maxRetries = 60;
+    const maxRetries = 300;
 
     while ((status === 'in_progress' || status === 'queued') && retries < maxRetries) {
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -226,17 +229,40 @@ export async function POST(request: NextRequest) {
           { headers }
         );
         
-        const assistantMsg = messagesRes.data.data.find((m: any) => m.role === 'assistant');
+        // Get messages created after this run (with 2-second buffer)
+        const recentMessages = messagesRes.data.data.filter((m: any) => 
+          m.role === 'assistant' && 
+          (m.created_at * 1000) >= (runCreatedAt - 2000)
+        );
+        
+
+        
+        // Get the most recent assistant message, fallback to any assistant message
+        const assistantMsg = recentMessages[0] || messagesRes.data.data.find((m: any) => m.role === 'assistant');
         
         // Process the assistant's response
         if (assistantMsg?.content) {
-          const textContent = assistantMsg.content.find((c: any) => c.type === 'text');
-          if (textContent) {
-            reply = textContent.text.value;
-            // Clean up any citation markers
-            reply = reply.replace(/【\d+:\d+†[^】]+】/g, '');
-            reply = reply.replace(/\[sandbox:.*?\]/g, '');
+          // Extract ALL text content parts and concatenate
+          const allTextParts = assistantMsg.content
+            .filter((item: any) => item.type === 'text')
+            .map((item: any) => item.text?.value || '')
+            .filter((text: string) => text.length > 0);
+          
+          const combinedText = allTextParts.join('\n\n');
+          
+          if (combinedText) {
+            reply = combinedText;
+          } else {
+            // Fallback to original logic
+            const textContent = assistantMsg.content.find((c: any) => c.type === 'text');
+            if (textContent) {
+              reply = textContent.text.value;
+            }
           }
+          
+          // Clean up any citation markers
+          reply = reply.replace(/【\d+:\d+†[^】]+】/g, '');
+          reply = reply.replace(/\[sandbox:.*?\]/g, '');
         }
         
         // Add sources if available

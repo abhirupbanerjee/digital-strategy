@@ -815,6 +815,9 @@ export async function POST(request: NextRequest) {
     console.log('Creating run with config:', { ...runConfig, tools });
     }
     let runId;
+    // Store creation timestamp for message filtering
+    const runCreatedAt = Date.now();
+    
     try {
       const runRes = await axios.post(
         `https://api.openai.com/v1/threads/${currentThreadId}/runs`,
@@ -823,7 +826,7 @@ export async function POST(request: NextRequest) {
       );
       runId = runRes.data.id;
       if (DEBUG) {
-      console.log('Run created:', runId);
+      console.log(`Run created at ${runCreatedAt}: ${runId}`);
       }
     } catch (error: any) {
       console.error('Run creation failed:', error.response?.data || error.message);
@@ -836,7 +839,7 @@ export async function POST(request: NextRequest) {
     // Poll for completion
     let status = 'in_progress';
     let retries = 0;
-    const maxRetries = 60;  // 60 seconds max wait time
+    const maxRetries = 300;  // 60 seconds max wait time
 
     while ((status === 'in_progress' || status === 'queued') && retries < maxRetries) {
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -896,15 +899,40 @@ export async function POST(request: NextRequest) {
           `https://api.openai.com/v1/threads/${currentThreadId}/messages`,
           { headers }
         );
-        
-        const assistantMsg = messagesRes.data.data.find((m: any) => m.role === 'assistant');
+
+      // Get messages created after this run (with 2-second buffer for timing issues)
+const recentMessages = messagesRes.data.data.filter((m: any) => 
+  m.role === 'assistant' && 
+  (m.created_at * 1000) >= (runCreatedAt - 2000)
+);
+
+// Get the most recent assistant message, fallback to any assistant message
+const assistantMsg = recentMessages[0] || messagesRes.data.data.find((m: any) => m.role === 'assistant');
 
         
         // Process the assistant's response using our extraction function
         if (assistantMsg?.content) {
           // CRITICAL: Pass threadId for Vercel Blob integration
           extractedResponse = await extractTextFromOpenAIResponse(assistantMsg, currentThreadId);
-          reply = extractedResponse.content;
+          
+          // ENHANCED: Also extract all text parts directly and concatenate
+          if (Array.isArray(assistantMsg.content)) {
+            const allTextParts = assistantMsg.content
+              .filter((item: any) => item.type === 'text')
+              .map((item: any) => item.text?.value || '')
+              .filter((text: string) => text.length > 0);
+            
+            const combinedText = allTextParts.join('\n\n');
+            
+            if (DEBUG) {
+              console.log(`Extracted ${allTextParts.length} text parts, total length: ${combinedText.length} characters`);
+            }
+            
+            // Use combined text if longer/better than extracted content
+            reply = combinedText.length > extractedResponse.content.length ? combinedText : extractedResponse.content;
+          } else {
+            reply = extractedResponse.content;
+          }
           
           // Clean up any remaining citation markers or artifacts
           reply = reply.replace(/【\d+:\d+†[^】]+】/g, '');
@@ -923,8 +951,16 @@ export async function POST(request: NextRequest) {
         } else {
           extractedResponse = { type: 'text', content: reply };
         }
+
+        
+
         
         if (DEBUG) {
+        console.log(`Thread ${currentThreadId} message analysis:`);
+        console.log(`- Total messages in thread: ${messagesRes.data.data.length}`);
+        console.log(`- Recent assistant messages: ${recentMessages.length}`);
+        console.log(`- Selected message created at: ${new Date(assistantMsg.created_at * 1000)}`);
+        console.log(`- Final response length: ${reply.length} characters`);
         console.log('Reply extracted and cleaned successfully');
         }
       } catch (error: any) {
