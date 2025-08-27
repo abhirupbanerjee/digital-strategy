@@ -36,6 +36,33 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     }
   };
 
+  // Detect if message content contains tables
+  const hasTableContent = React.useMemo(() => {
+    if (typeof message.content !== 'string') return false;
+    
+    // Check for markdown table indicators
+    const tablePatterns = [
+      /\|.*\|.*\|/,  // Basic table row pattern
+      /\|[\s]*:?-+:?[\s]*\|/,  // Table separator row
+      /<table[\s\S]*<\/table>/i,  // HTML table
+    ];
+    
+    return tablePatterns.some(pattern => pattern.test(message.content as string));
+  }, [message.content]);
+
+  // Dynamic overflow handling based on content
+  const getOverflowClass = (role: string) => {
+    const baseStyle = getMessageStyle(role);
+    
+    if (hasTableContent) {
+      // Allow horizontal overflow for tables
+      return `p-3 rounded-md overflow-y-hidden overflow-x-auto message-with-tables ${baseStyle}`;
+    } else {
+      // Maintain existing overflow behavior for other content
+      return `p-3 rounded-md overflow-hidden ${baseStyle}`;
+    }
+  };
+
   return (
     <motion.div key={index}>
       <p className="font-bold mb-1 text-sm md:text-base">
@@ -44,8 +71,11 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           <span className="text-xs text-gray-500">({message.timestamp})</span>
         )}
       </p>
-      <div className={`p-3 rounded-md overflow-hidden ${getMessageStyle(message.role)}`}>
-        <MarkdownMessage content={message.content} />
+      <div className={getOverflowClass(message.role)}>
+        <MarkdownMessage 
+          content={message.content} 
+          className={hasTableContent ? "has-table-content" : ""} 
+        />
         
         {message.files && message.files.length > 0 && (
           <div className="mt-3">

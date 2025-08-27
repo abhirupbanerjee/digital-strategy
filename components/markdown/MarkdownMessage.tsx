@@ -45,21 +45,21 @@ export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({
             });
             
 
-  // If contains block elements, use div instead of p
-  if (hasBlockElements) {
-    return (
-      <div className="mb-3 md:mb-4 leading-relaxed text-sm md:text-base text-gray-700" {...props}>
-        {children}
-      </div>
-    );
-  }
+            // If contains block elements, use div instead of p
+            if (hasBlockElements) {
+              return (
+                <div className="mb-3 md:mb-4 leading-relaxed text-sm md:text-base text-gray-700" {...props}>
+                  {children}
+                </div>
+              );
+            }
 
-  return (
-    <p className="mb-3 md:mb-4 leading-relaxed text-sm md:text-base text-gray-700" {...props}>
-      {children}
-    </p>
-  );
-},
+            return (
+              <p className="mb-3 md:mb-4 leading-relaxed text-sm md:text-base text-gray-700" {...props}>
+                {children}
+              </p>
+            );
+          },
 
           a: ({ href, children, ...props }) => {
             const isCitation = href?.startsWith('http');
@@ -127,83 +127,128 @@ export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({
               {children}
             </li>
           ),
+          
+          // ====== ENHANCED TABLE COMPONENTS ======
           table: ({ children, ...props }) => (
-            <div className="table-scroll-container my-4">
+            <div className="table-scroll-container my-4" role="region" aria-label="Data table">
               <table className="min-w-full" {...props}>
                 {children}
               </table>
             </div>
           ),
+          
+          thead: ({ children, ...props }) => (
+            <thead {...props}>
+              {children}
+            </thead>
+          ),
+          
+          tbody: ({ children, ...props }) => (
+            <tbody {...props}>
+              {children}
+            </tbody>
+          ),
+          
+          tr: ({ children, ...props }) => (
+            <tr {...props}>
+              {children}
+            </tr>
+          ),
+          
           th: ({ children, ...props }) => (
-            <th className="sticky-header" {...props}>
+            <th 
+              className="sticky-header" 
+              scope="col"
+              {...props}
+            >
               {children}
             </th>
           ),
+          
           td: ({ children, ...props }) => (
             <td {...props}>
               {children}
             </td>
           ),
+          
           blockquote: ({ children, ...props }) => (
             <blockquote className="border-l-4 border-gray-300 pl-3 md:pl-4 py-2 mb-3 md:mb-4 italic text-gray-600 text-sm md:text-base" {...props}>
               {children}
             </blockquote>
           ),
+          
           img: ({ src, alt, ...props }) => {
-  if (!src || (typeof src === 'string' && src.trim() === '')) {
-    return <span className="text-gray-500 italic">[Image not available]</span>;
-  }
-  
-    if (typeof src === 'string' && src.startsWith('/api/files/')) {
-      // For files that are actually images, render them as images
-      return (
-        <div className="my-4">
-          <img 
-            src={src} 
-            alt={alt || 'Generated Image'} 
-            className="max-w-full h-auto rounded border shadow-sm"
-            onError={(e) => {
-              // Fallback to download link if image fails to load
-              const parent = e.currentTarget.parentElement;
-              if (parent) {
-                parent.innerHTML = `
-                  <div class="my-2 p-3 border rounded bg-gray-50">
-                    <span class="text-sm text-gray-600">📊 ${alt || 'Generated File'}</span>
-                    <a href="${src}" download target="_blank" 
-                      class="ml-2 text-blue-600 hover:text-blue-800 underline text-sm">
-                      Download
-                    </a>
-                  </div>
-                `;
-              }
-            }}
-            {...props}
-          />
-        </div>
-      );
-    }
-    
-    return (
-      <img 
-        src={src} 
-        alt={alt || ''} 
-        className="max-w-full h-auto rounded border"
-        onError={(e) => {
-          e.currentTarget.style.display = 'none';
-        }}
-        {...props}
-      />
-    );
-  },
-
+            if (!src || (typeof src === 'string' && src.trim() === '')) {
+              return <span className="text-gray-500 italic">[Image not available]</span>;
+            }
+            
+            if (typeof src === 'string' && src.startsWith('/api/files/')) {
+              // For files that are actually images, render them as images
+              return (
+                <div className="my-4">
+                  <img 
+                    src={src} 
+                    alt={alt || 'Generated Image'} 
+                    className="max-w-full h-auto rounded border shadow-sm"
+                    onError={(e) => {
+                      // Fallback for broken images
+                      const target = e.target as HTMLImageElement;
+                      target.style.display = 'none';
+                      const parent = target.parentElement;
+                      if (parent) {
+                        parent.innerHTML = '<span class="text-gray-500 italic">[Image could not be loaded]</span>';
+                      }
+                    }}
+                    {...props}
+                  />
+                </div>
+              );
+            }
+            
+            // For other images (external URLs, etc.)
+            return (
+              <img 
+                src={src} 
+                alt={alt || 'Image'} 
+                className="max-w-full h-auto my-4 rounded border shadow-sm"
+                onError={(e) => {
+                  const target = e.target as HTMLImageElement;
+                  target.style.display = 'none';
+                  const parent = target.parentElement;
+                  if (parent) {
+                    parent.innerHTML = '<span class="text-gray-500 italic">[Image could not be loaded]</span>';
+                  }
+                }}
+                {...props}
+              />
+            );
+          },
+          
+          // Enhanced support for other elements
           strong: ({ children, ...props }) => (
             <strong className="font-semibold text-gray-900" {...props}>
               {children}
             </strong>
           ),
+          
+          em: ({ children, ...props }) => (
+            <em className="italic text-gray-800" {...props}>
+              {children}
+            </em>
+          ),
+          
+          del: ({ children, ...props }) => (
+            <del className="line-through text-gray-500" {...props}>
+              {children}
+            </del>
+          ),
+          
+          hr: ({ ...props }) => (
+            <hr className="my-6 border-gray-200" {...props} />
+          ),
         }}
       >
-        {extractTextContent(content)}
+        {content}
       </ReactMarkdown>
     </div>
   );

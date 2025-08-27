@@ -74,7 +74,25 @@ body {
   hyphens: auto;
 }
 
-/* Enhanced table container with better scrolling */
+/* ====== ROOT PROBLEM FIX: TABLE CONTAINER OVERRIDES ====== */
+
+/* Message containers with tables - override default overflow behavior */
+.message-with-tables {
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+}
+
+/* Message content with tables - allow horizontal overflow */
+.message-content.has-table-content {
+  overflow-x: visible !important;
+}
+
+.message-content.has-table-content > * {
+  max-width: none; /* Remove width constraints for table content */
+}
+
+/* ====== ENHANCED TABLE CONTAINER ====== */
+
 .table-scroll-container {
   width: 100%;
   overflow-x: auto;
@@ -84,6 +102,7 @@ body {
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   background: white;
+  position: relative;
 }
 
 .table-scroll-container table {
@@ -110,13 +129,16 @@ body {
   min-width: 100px;
 }
 
-.table-scroll-container table th {
-  background-color: #f9fafb;
-  font-weight: 600;
-  color: #374151;
-  position: sticky;
-  top: 0;
-  z-index: 10;
+/* ====== MISSING STICKY HEADER DEFINITION ====== */
+.table-scroll-container table th,
+.sticky-header {
+  background-color: #f9fafb !important;
+  font-weight: 600 !important;
+  color: #374151 !important;
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 10 !important;
+  border-top: 1px solid #e5e7eb;
 }
 
 /* Remove last column border */
@@ -149,12 +171,64 @@ body {
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
 }
 
+/* ====== ENHANCED RESPONSIVE DESIGN ====== */
+
 /* Special handling for tables in messages */
 .message-content .table-scroll-container {
-  max-width: calc(100vw - 3rem);
+  max-width: calc(100vw - 4rem); /* Account for message padding */
 }
 
-/* Mobile responsive adjustments */
+/* Small mobile devices */
+@media (max-width: 320px) {
+  .table-scroll-container {
+    margin: 0.5rem -0.75rem;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+  }
+  
+  .table-scroll-container table {
+    min-width: 400px;
+  }
+  
+  .table-scroll-container table th,
+  .table-scroll-container table td {
+    padding: 4px 6px;
+    font-size: 10px;
+    min-width: 60px;
+  }
+  
+  .message-content .table-scroll-container {
+    max-width: 100vw;
+  }
+}
+
+/* Standard mobile devices */
+@media (max-width: 480px) {
+  .table-scroll-container {
+    margin: 0.5rem -1rem;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+  }
+  
+  .table-scroll-container table {
+    min-width: 500px;
+  }
+  
+  .table-scroll-container table th,
+  .table-scroll-container table td {
+    padding: 4px 6px;
+    font-size: 11px;
+    min-width: 60px;
+  }
+  
+  .message-content .table-scroll-container {
+    max-width: 100vw;
+  }
+}
+
+/* Tablet and larger mobile */
 @media (max-width: 768px) {
   .table-scroll-container {
     margin: 0.5rem -1rem;
@@ -179,17 +253,89 @@ body {
   }
 }
 
-@media (max-width: 480px) {
+/* Desktop - optimal display */
+@media (min-width: 769px) {
+  .message-content .table-scroll-container {
+    max-width: 100%;
+    margin: 1rem 0;
+    border-radius: 8px;
+    border: 1px solid #e5e7eb;
+  }
+  
+  .table-scroll-container table {
+    min-width: 600px;
+  }
+  
   .table-scroll-container table th,
   .table-scroll-container table td {
-    padding: 4px 6px;
-    font-size: 11px;
-    min-width: 60px;
+    padding: 8px 12px;
+    font-size: 14px;
+    min-width: 100px;
   }
 }
 
-@media (min-width: 768px) {
+/* Large desktop - wide tables */
+@media (min-width: 1024px) {
   .message-content .table-scroll-container {
-    max-width: 100%;
+    max-width: none; /* Allow full width on large screens */
+  }
+  
+  .table-scroll-container table {
+    min-width: 700px;
+  }
+}
+
+/* ====== ACCESSIBILITY & TOUCH IMPROVEMENTS ====== */
+
+/* Better touch scrolling indicators on mobile */
+@media (max-width: 768px) {
+  .table-scroll-container::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 20px;
+    background: linear-gradient(to left, rgba(255,255,255,0.8) 0%, transparent 100%);
+    pointer-events: none;
+    z-index: 5;
+  }
+  
+  .table-scroll-container::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 20px;
+    background: linear-gradient(to right, rgba(255,255,255,0.8) 0%, transparent 100%);
+    pointer-events: none;
+    z-index: 5;
+  }
+}
+
+/* Focus states for better accessibility */
+.table-scroll-container:focus-within {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .table-scroll-container {
+    border: 2px solid #000;
+  }
+  
+  .table-scroll-container table th,
+  .table-scroll-container table td {
+    border: 1px solid #000;
+  }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  .table-scroll-container:hover {
+    box-shadow: none;
+    transition: none;
   }
 }
