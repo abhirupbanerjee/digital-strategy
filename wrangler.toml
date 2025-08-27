@@ -1,8 +1,0 @@
-name = "gea-ai-assistant"
-compatibility_date = "2024-04-24"
-pages_build_output_dir = "./out"
-
-[vars]
-OPENAI_ASSISTANT_ID = ""
-OPENAI_API_KEY = ""
-OPENAI_ORGANIZATION = ""

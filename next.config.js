@@ -1,14 +1,31 @@
-// next.config.js
-//module.exports = {
-//  output: "export",
-//  images: {
-//    unoptimized: true
-//  }
-//};
-
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // DO NOT include: output: "export"
-};
+  // Handle CORS for development
+  async headers() {
+    // Only apply in development
+    if (process.env.NODE_ENV === 'development') {
+      return [
+        {
+          source: '/(.*)',
+          headers: [
+            {
+              key: 'Access-Control-Allow-Origin',
+              value: '*'
+            },
+            {
+              key: 'Access-Control-Allow-Methods',
+              value: 'GET, POST, PUT, DELETE, OPTIONS'
+            },
+            {
+              key: 'Access-Control-Allow-Headers',
+              value: 'Content-Type, Authorization'
+            }
+          ]
+        }
+      ]
+    }
+    return []
+  }
+}
 
-module.exports = nextConfig;
+module.exports = nextConfig
