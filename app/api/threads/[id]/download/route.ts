@@ -371,7 +371,10 @@ export async function POST(
       const OpenAI = (await import('openai')).default;
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
       
-      const openaiMessages = await openai.beta.threads.messages.list(threadId);
+      const openaiMessages = await openai.beta.threads.messages.list(threadId, {
+        limit: 100,  // Fetch up to 100 messages instead of default 20
+        order: 'asc'
+      });
       
       messages = openaiMessages.data
         .reverse()

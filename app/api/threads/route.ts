@@ -166,7 +166,10 @@ export async function GET(request: NextRequest) {
       });
 
       // Get messages from OpenAI
-      const messages = await openai.beta.threads.messages.list(threadId);
+      const messages = await openai.beta.threads.messages.list(threadId, {
+        limit: 100,  // Fetch up to 100 messages instead of default 20
+        //order: 'asc'
+      });
       
       // ENHANCED: Convert OpenAI messages to our format with blob URL support
       const formattedMessages = await Promise.all(

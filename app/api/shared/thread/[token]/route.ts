@@ -65,7 +65,10 @@ export async function GET(
         apiKey: process.env.OPENAI_API_KEY,
       });
 
-      const openaiMessages = await openai.beta.threads.messages.list(share.thread_id);
+      const openaiMessages = await openai.beta.threads.messages.list(share.thread_id, {
+        limit: 100,  // Fetch up to 100 messages instead of default 20
+        //order: 'asc'
+      });
       
       // Process messages similar to existing thread API
       messages = openaiMessages.data
