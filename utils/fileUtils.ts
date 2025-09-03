@@ -21,6 +21,7 @@ export const handleFileUpload = async (
         const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
         oversizedFiles.push(`${file.name} (${sizeMB}MB)`);
         console.error(`File ${file.name} is ${sizeMB}MB, exceeds 4MB limit`);
+        alert(`File "${file.name}" is ${sizeMB}MB. Maximum allowed is 4MB.\n\nPlease compress the file or split it into smaller parts.`);  // ← ADD THIS LINE
         continue; // Skip this file
       }
       
