@@ -373,7 +373,7 @@ export async function POST(
       
       const openaiMessages = await openai.beta.threads.messages.list(threadId, {
         limit: 100,  // Fetch up to 100 messages instead of default 20
-        order: 'asc'
+        //order: 'asc'
       });
       
       messages = openaiMessages.data

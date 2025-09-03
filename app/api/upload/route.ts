@@ -26,11 +26,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate file size (20MB limit)
-    const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB in bytes
+    // Validate file size (4MB limit)
+    const MAX_FILE_SIZE = 4 * 1024 * 1024; // 4MB in bytes
     if (file.size > MAX_FILE_SIZE) {
       return NextResponse.json(
-        { error: 'File size exceeds 20MB limit' },
+        { error: 'File size exceeds 4MB limit' },
         { status: 400 }
       );
     }
@@ -139,7 +139,7 @@ export async function POST(request: NextRequest) {
     if (error.response?.data?.error?.message) {
       errorMessage = error.response.data.error.message;
     } else if (error.response?.status === 413) {
-      errorMessage = 'File is too large (max 20MB)';
+      errorMessage = 'File is too large (max 4MB)';
     } else if (error.response?.status === 401) {
       errorMessage = 'Invalid OpenAI API key';
     } else if (error.code === 'ECONNABORTED') {

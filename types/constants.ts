@@ -1,6 +1,7 @@
 // utils/constants.ts
 export const CONSTANTS = {
-  MAX_FILE_SIZE: 20 * 1024 * 1024, // 20MB
+  MAX_FILE_SIZE: 4 * 1024 * 1024, // 20MB
+  MAX_FILE_SIZE_MB: 4, 
   SEARCH_FLAG: '___WEB_SEARCH_IN_PROGRESS___',
   TITLE_TRUNCATE_LENGTH: {
     mobile: 30,
