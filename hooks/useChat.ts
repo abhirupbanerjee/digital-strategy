@@ -33,6 +33,7 @@ export const useChat = () => {
 
     setMessages(prev => [...prev, userMessage]);
 
+    /*
     // Show search indicator if web search is enabled
     if (webSearchEnabled) {
       setMessages(prev => [
@@ -44,7 +45,7 @@ export const useChat = () => {
         }
       ]);
     }
-
+    */
     try {
       const response = await ChatService.sendMessage({
         message: input,
@@ -60,6 +61,7 @@ export const useChat = () => {
           !(msg.role === "system" && typeof msg.content === 'string' && msg.content.includes(CONSTANTS.SEARCH_FLAG))
         ));
       }
+     
 
       // Update thread ID if new
       if (response.threadId && response.threadId !== threadId) {

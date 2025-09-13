@@ -4,6 +4,7 @@ import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
 import { put } from '@vercel/blob';
 import { ThreadFileService } from '../../../services/threadFileService';
+import { FunctionHandlers } from '../../../services/functionHandlers';
 
 const ASSISTANT_ID = process.env.OPENAI_ASSISTANT_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -504,35 +505,30 @@ function cleanResponseFromSearchArtifacts(response: string): string {
   return cleaned.trim();
 }
 
+
 export async function POST(request: NextRequest) {
   try {
-    const { message, originalMessage, threadId, webSearchEnabled, fileIds, shareToken, useJsonFormat } = await request.json();
+    const { 
+      message, 
+      threadId, 
+      webSearchEnabled = false,
+      fileIds = [],
+      useJsonFormat = false,
+      originalMessage = null
+    } = await request.json();
 
-    // Validate share token if provided
-    if (shareToken) {
-      const { data: share } = await supabase
-        .from('thread_shares')
-        .select('permissions, expires_at, thread_id')
-        .eq('share_token', shareToken)
-        .single();
-        
-      if (!share || new Date(share.expires_at) < new Date()) {
-        return NextResponse.json({ error: 'Invalid or expired share' }, { status: 403 });
-      }
-      
-      if (share.permissions !== 'collaborate') {
-        return NextResponse.json({ error: 'Read-only access' }, { status: 403 });
-      }
+    if (DEBUG) {
+      console.log('Chat API called with:', {
+        message: message?.substring(0, 100) + '...',
+        threadId,
+        webSearchEnabled,
+        fileIds,
+        hasAssistantId: !!ASSISTANT_ID,
+        hasApiKey: !!OPENAI_API_KEY,
+        hasOrganization: !!OPENAI_ORGANIZATION
+      });
     }
 
-    // Environment check
-    if (DEBUG) {
-    console.log('Environment check:', {
-      hasAssistantId: !!ASSISTANT_ID,
-      hasApiKey: !!OPENAI_API_KEY,
-      hasOrganization: !!OPENAI_ORGANIZATION
-    });
-  }
     if (!ASSISTANT_ID || !OPENAI_API_KEY) {
       console.error('Missing OpenAI configuration');
       return NextResponse.json(
@@ -563,7 +559,7 @@ export async function POST(request: NextRequest) {
     // Create thread if needed
     if (!currentThreadId) {
       if (DEBUG) {
-      console.log('Creating new thread...');
+        console.log('Creating new thread...');
       }
       try {
         const threadRes = await axios.post(
@@ -573,7 +569,7 @@ export async function POST(request: NextRequest) {
         );
         currentThreadId = threadRes.data.id;
         if (DEBUG) {
-        console.log('Thread created:', currentThreadId);
+          console.log('Thread created:', currentThreadId);
         }
       } catch (error: any) {
         console.error('Thread creation failed:', error.response?.data || error.message);
@@ -584,9 +580,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ========================================
-    // NEW: Get existing thread files for persistence
-    // ========================================
+    // Get existing thread files for persistence
     let existingThreadFiles: string[] = [];
     
     if (currentThreadId) {
@@ -599,167 +593,41 @@ export async function POST(request: NextRequest) {
         }
       } catch (error) {
         console.error('Error retrieving thread files:', error);
-        // Continue without existing files rather than failing
       }
     }
 
-    // Web search enhancement
-    let enhancedMessage = message;
-    let searchSources: any[] = [];
-    let webSearchPerformed = false;
+    // Process new files
+    const newFileIds = fileIds || [];
+    const allFileIds = [...existingThreadFiles, ...newFileIds];
+    const allFileIdsUnique = Array.from(new Set(allFileIds));
     
-    if (webSearchEnabled && TAVILY_API_KEY) {
-      try {
-        if (DEBUG) {
-        console.log('Performing Tavily search for:', originalMessage || message);
-        }
-        
-        const searchResponse = await axios.post(
-          'https://api.tavily.com/search',
-          {
-            api_key: TAVILY_API_KEY,
-            query: originalMessage || message, // Use original message for search
-            search_depth: 'basic',
-            include_answer: true,
-            max_results: 5,
-          },
-          {
-            headers: {
-              'Content-Type': 'application/json',
-            }
-          }
-        );
-        
-        if (searchResponse.data) {
-          const data = searchResponse.data;
-          webSearchPerformed = true;
-          
-          enhancedMessage = `${message}\n\n[INTERNAL SEARCH CONTEXT - DO NOT INCLUDE IN RESPONSE]:\n`;
-          
-          if (data.answer) {
-            enhancedMessage += `\nWeb Summary: ${data.answer}\n`;
-          }
-          
-          if (data.results && data.results.length > 0) {
-            enhancedMessage += '\nCurrent Web Information:\n';
-            data.results.forEach((result: any, idx: number) => {
-              enhancedMessage += `${idx + 1}. ${result.title}\n`;
-              enhancedMessage += `   ${result.content.substring(0, 200)}...\n`;
-              enhancedMessage += `   Source: ${result.url}\n\n`;
-              
-              searchSources.push({
-                title: result.title,
-                url: result.url,
-                score: result.score
-              });
-            });
-          }
-          
-          enhancedMessage += '\n[END SEARCH CONTEXT]\n\n';
-          
-          // Add JSON formatting instruction if requested
-          if (useJsonFormat) {
-            enhancedMessage += 'IMPORTANT: Please provide a natural response incorporating relevant information from the search results above. Cite sources naturally when using specific information, but do not mention the search context formatting. Focus on being helpful and accurate. Format your response as a valid JSON object with the following structure:\n\n{\n  "content": "Your main response content here",\n  "sources": ["source1", "source2"],\n  "type": "response_with_search",\n  "metadata": {\n    "search_performed": true,\n    "sources_count": number_of_sources\n  }\n}\n\nDO NOT include any text outside this JSON structure.';
-          } else {
-            enhancedMessage += 'IMPORTANT: Please provide a natural response incorporating relevant information from the search results above. Cite sources naturally when using specific information, but do not mention the search context formatting. Focus on being helpful and accurate.';
-          }
-          
-          if (DEBUG) {
-          console.log('Web search enhanced message created');
-          }
-        }
-      } catch (searchError: any) {
-        console.error('Tavily search failed:', searchError.response?.data || searchError.message);
-        enhancedMessage = `${message}\n\n[Note: Web search was requested but encountered an error. Responding based on available knowledge.]`;
-        
-        if (useJsonFormat) {
-          enhancedMessage += '\n\nPlease format your response as a valid JSON object with the following structure:\n\n{\n  "content": "Your response content here",\n  "type": "response_without_search",\n  "metadata": {\n    "search_performed": false,\n    "search_error": true\n  }\n}\n\nDO NOT include any text outside this JSON structure.';
-        }
-      }
-    } else if (useJsonFormat) {
-      // Add JSON formatting instruction even without search
-      enhancedMessage = `${message}\n\nPlease format your response as a valid JSON object with the following structure:\n\n{\n  "content": "Your response content here",\n  "type": "standard_response",\n  "metadata": {\n    "search_performed": false\n  }\n}\n\nDO NOT include any text outside this JSON structure.`;
-    }
-    
-    // ========================================
-    // UPDATED: Combine new uploads with existing thread files
-    // ========================================
-    
-    // Prepare the SINGLE message for the thread with both content and files
-    interface MessageForThread {
-      role: string;
-      content: any;
-      attachments?: Array<{
-        file_id: string;
-        tools: Array<{ type: string }>;
-      }>;
-    }
+    // Prepare message content
+    const messageContent = [{
+      type: 'text',
+      text: message
+    }];
 
-    // Use enhanced message if web search was performed, otherwise use original
-    const messageContent = webSearchPerformed || useJsonFormat ? enhancedMessage : (originalMessage || message);
-
-    const messageForThread: MessageForThread = {
+    // Prepare message with files
+    const messageForThread: any = {
       role: 'user',
       content: messageContent
     };
 
-    // ========================================
-    // CRITICAL: Combine new uploads with existing thread files
-    // ========================================
-    
-    // Combine new file uploads with existing thread files
-    const newFileIds = fileIds || [];
-    const allFileIds = [...new Set([...newFileIds, ...existingThreadFiles])]; // Remove duplicates
-    
-    if (DEBUG) {
-      console.log(`File attachment summary:
-        - New uploads: ${newFileIds.length} files
-        - Existing thread files: ${existingThreadFiles.length} files
-        - Total files to attach: ${allFileIds.length} files`);
-    }
-
-    // Store file types from upload (you'll need to pass this from frontend)
-    interface FileInfo {
-      fileId: string;
-      type: string;
-    }
-
-    // Determine which tool to use based on file type
-    const getToolsForFile = (fileType: string) => {
-      // File types that work with file_search
-      const searchableTypes = ['.pdf', '.txt', '.md', '.docx', '.html', '.json'];
-      
-      // File types that need code_interpreter
-      const codeTypes = ['.xlsx', '.xls', '.csv', '.py', '.js', '.ts'];
-      
-      // Check file extension
-      const extension = fileType.toLowerCase();
-      
-      if (codeTypes.some(ext => extension.includes(ext))) {
-        return [{ type: "code_interpreter" }];
-      } else if (searchableTypes.some(ext => extension.includes(ext))) {
-        return [{ type: "file_search" }];
-      } else {
-        // Default to code_interpreter for unknown types
-        return [{ type: "code_interpreter" }];
-      }
-    };
-
-    // CRITICAL: Attach ALL files (new + existing) with appropriate tools
-    if (allFileIds.length > 0) {
-      messageForThread.attachments = allFileIds.map((fileId: string) => ({
+    // Add file attachments if any
+    if (allFileIdsUnique.length > 0) {
+      messageForThread.attachments = allFileIdsUnique.map(fileId => ({
         file_id: fileId,
-        tools: [{ type: "code_interpreter" }]  // Use code_interpreter for Excel/CSV files
+        tools: [{ type: "code_interpreter" }]
       }));
       
       if (DEBUG) {
-        console.log('Total files attached to message:', allFileIds);
+        console.log('Total files attached to message:', allFileIdsUnique.length);
       }
     }
 
-    // Add the SINGLE message to thread (with both content and files)
+    // Add message to thread
     if (DEBUG) {
-    console.log('Adding message to thread with files and enhanced content...');
+      console.log('Adding message to thread...');
     }
     try {
       await axios.post(
@@ -768,16 +636,14 @@ export async function POST(request: NextRequest) {
         { headers }
       );
       if (DEBUG) {
-      console.log('Message added to thread successfully');
+        console.log('Message added to thread successfully');
       }
     } catch (error: any) {
       console.error('Failed to add message:', error.response?.data || error.message);
       
-      // Extract detailed error information
       const errorData = error.response?.data?.error || {};
       let errorMessage = 'Failed to add message to thread';
       
-      // Check for file-specific errors
       if (errorData.code === 'unsupported_file') {
         errorMessage = `File type error: ${errorData.message}. Using code_interpreter instead of file_search.`;
         console.log('Switching to code_interpreter for unsupported file types');
@@ -791,13 +657,55 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ========================================
-    // ENSURE file_search is ALWAYS enabled when files are present
-    // ========================================
-    
-    // Configure run - UPDATED
+    // Configure tools
+    const tools: any[] = [];
+
+    // Always include code_interpreter
+    tools.push({ type: "code_interpreter" });
+
+    // Add file_search if no files are attached
+    if (!allFileIdsUnique || allFileIdsUnique.length === 0) {
+      tools.push({ type: "file_search" });
+    }
+
+    // Add web_search function if Tavily is configured and web search is enabled
+    if (TAVILY_API_KEY && webSearchEnabled) {
+      tools.push({
+        type: "function",
+        function: {
+          name: "web_search",
+          description: "Search the web for current information, recent events, or when you need up-to-date data beyond your knowledge cutoff",
+          parameters: {
+            type: "object",
+            properties: {
+              query: {
+                type: "string",
+                description: "The search query - be specific and concise"
+              },
+              search_depth: {
+                type: "string",
+                enum: ["basic", "advanced"],
+                description: "Search depth - 'basic' for quick results (default), 'advanced' for comprehensive search",
+                default: "basic"
+              },
+              max_results: {
+                type: "integer",
+                description: "Maximum number of results to return (1-10)",
+                default: 5,
+                minimum: 1,
+                maximum: 10
+              }
+            },
+            required: ["query"]
+          }
+        }
+      });
+    }
+
+    // Configure run
     const runConfig: any = {
       assistant_id: ASSISTANT_ID,
+      tools: tools
     };
 
     // Add JSON format if requested
@@ -805,54 +713,19 @@ export async function POST(request: NextRequest) {
       runConfig.response_format = { type: "json_object" };
     }
 
-    // Configure tools based on file types and features
-    const tools = [];
-
-    // Always include code_interpreter for general functionality and Excel/CSV files
-    tools.push({ type: "code_interpreter" });
-
-    // Only include file_search for web search or searchable document types
-    // Don't include it for Excel files as it causes errors
-    if (webSearchEnabled && (!allFileIds || allFileIds.length === 0)) {
-      // Only add file_search if we're doing web search without files
-      tools.push({ type: "file_search" });
-      if (DEBUG) {
-        console.log('file_search tool enabled for web search');
-      }
-    }
-
-    // Note: We're NOT adding file_search when files are present
-    // because Excel files (.xlsx, .xls, .csv) don't support it
-    if (DEBUG && allFileIds && allFileIds.length > 0) {
-      console.log('Using code_interpreter for file processing (Excel/CSV compatible)');
-    }
-
-    // Add tools to run configuration
-    runConfig.tools = tools;
-
-    // Enhanced instructions for file processing
-    if (allFileIds && allFileIds.length > 0) {
-      let instructions = "You have access to uploaded files. Please analyze the file content carefully and provide specific, detailed responses based on the actual content.";
-      
-      if (webSearchEnabled && searchSources.length > 0) {
-        instructions += " You also have access to current web search results. Combine information from both the uploaded files and web search when relevant.";
-      }
-      
-      if (existingThreadFiles.length > 0) {
-        instructions += ` Note: Some files were uploaded in previous messages and are still available for reference (${existingThreadFiles.length} existing files).`;
-      }
-      
-      runConfig.additional_instructions = instructions;
-    } else if (webSearchEnabled && searchSources.length > 0) {
-      runConfig.additional_instructions = "You have access to current web search results. Use this information to provide accurate, up-to-date responses. When citing information from search results, reference sources naturally without exposing internal search formatting.";
+    // Add instructions based on context
+    if (allFileIdsUnique.length > 0) {
+      runConfig.additional_instructions = "You have access to uploaded files. Please analyze the file content carefully and provide specific, detailed responses based on the actual content.";
+    } else if (webSearchEnabled && TAVILY_API_KEY) {
+      runConfig.additional_instructions = "Feel free to use the web_search function to find current information when needed.";
     }
 
     // Create run
     if (DEBUG) {
-    console.log('Creating run with config:', { ...runConfig, tools });
+      console.log('Creating run with config:', { ...runConfig, tools: tools.map(t => t.type) });
     }
+    
     let runId;
-    // Store creation timestamp for message filtering
     const runCreatedAt = Date.now();
     
     try {
@@ -863,7 +736,7 @@ export async function POST(request: NextRequest) {
       );
       runId = runRes.data.id;
       if (DEBUG) {
-      console.log(`Run created at ${runCreatedAt}: ${runId}`);
+        console.log(`Run created at ${runCreatedAt}: ${runId}`);
       }
     } catch (error: any) {
       console.error('Run creation failed:', error.response?.data || error.message);
@@ -876,9 +749,9 @@ export async function POST(request: NextRequest) {
     // Poll for completion
     let status = 'in_progress';
     let retries = 0;
-    const maxRetries = 300;  // 60 seconds max wait time
+    const maxRetries = 300;
 
-    while ((status === 'in_progress' || status === 'queued') && retries < maxRetries) {
+    while ((status === 'in_progress' || status === 'queued' || status === 'requires_action') && retries < maxRetries) {
       await new Promise(resolve => setTimeout(resolve, 1000));
       
       try {
@@ -889,23 +762,54 @@ export async function POST(request: NextRequest) {
         
         status = statusRes.data.status;
         if (DEBUG) {
-        console.log(`Run status: ${status} (attempt ${retries + 1})`);
+          console.log(`Run status: ${status} (attempt ${retries + 1})`);
         }
         
-        // Handle required actions (like tool calls)
+        // Handle function calls
         if (status === 'requires_action') {
           const requiredAction = statusRes.data.required_action;
+          
           if (requiredAction?.type === 'submit_tool_outputs') {
-            if (DEBUG) {
-            console.log('Tool outputs required:', requiredAction);
+            const toolCalls = requiredAction.submit_tool_outputs.tool_calls;
+            const toolOutputs = [];
+            
+            for (const toolCall of toolCalls) {
+              if (DEBUG) {
+                console.log('Processing tool call:', toolCall);
+              }
+              
+              const output = await FunctionHandlers.handleFunctionCall(toolCall);
+              
+              toolOutputs.push({
+                tool_call_id: toolCall.id,
+                output: output
+              });
             }
-            // Tool output handling can be implemented here if needed
+            
+            // Submit tool outputs
+            try {
+              const submitRes = await axios.post(
+                `https://api.openai.com/v1/threads/${currentThreadId}/runs/${runId}/submit_tool_outputs`,
+                { tool_outputs: toolOutputs },
+                { headers }
+              );
+              
+              if (DEBUG) {
+                console.log('Tool outputs submitted:', submitRes.data.status);
+              }
+              
+              // Continue polling
+              status = submitRes.data.status;
+            } catch (submitError: any) {
+              console.error('Failed to submit tool outputs:', submitError.response?.data || submitError.message);
+              break;
+            }
           }
         }
         
         if (status === 'failed') {
           if (DEBUG) {
-          console.error('Run failed:', statusRes.data);
+            console.error('Run failed:', statusRes.data);
           }
           break;
         }
@@ -915,7 +819,7 @@ export async function POST(request: NextRequest) {
         }
       } catch (error: any) {
         if (DEBUG) {
-        console.error('Status check failed:', error.response?.data || error.message);
+          console.error('Status check failed:', error.response?.data || error.message);
         }
         break;
       }
@@ -929,7 +833,7 @@ export async function POST(request: NextRequest) {
 
     if (status === 'completed') {
       if (DEBUG) {
-      console.log('Run completed, fetching messages...');
+        console.log('Run completed, fetching messages...');
       }
       try {
         const messagesRes = await axios.get(
@@ -937,22 +841,17 @@ export async function POST(request: NextRequest) {
           { headers }
         );
 
-      // Get messages created after this run (with 2-second buffer for timing issues)
-const recentMessages = messagesRes.data.data.filter((m: any) => 
-  m.role === 'assistant' && 
-  (m.created_at * 1000) >= (runCreatedAt - 2000)
-);
+        // Get messages created after this run
+        const recentMessages = messagesRes.data.data.filter((m: any) => 
+          m.role === 'assistant' && 
+          (m.created_at * 1000) >= (runCreatedAt - 2000)
+        );
 
-// Get the most recent assistant message, fallback to any assistant message
-const assistantMsg = recentMessages[0] || messagesRes.data.data.find((m: any) => m.role === 'assistant');
+        const assistantMsg = recentMessages[0] || messagesRes.data.data.find((m: any) => m.role === 'assistant');
 
-        
-        // Process the assistant's response using our extraction function
         if (assistantMsg?.content) {
-          // CRITICAL: Pass threadId for Vercel Blob integration
           extractedResponse = await extractTextFromOpenAIResponse(assistantMsg, currentThreadId);
           
-          // ENHANCED: Also extract all text parts directly and concatenate
           if (Array.isArray(assistantMsg.content)) {
             const allTextParts = assistantMsg.content
               .filter((item: any) => item.type === 'text')
@@ -965,44 +864,17 @@ const assistantMsg = recentMessages[0] || messagesRes.data.data.find((m: any) =>
               console.log(`Extracted ${allTextParts.length} text parts, total length: ${combinedText.length} characters`);
             }
             
-            // Use combined text if longer/better than extracted content
             reply = combinedText.length > extractedResponse.content.length ? combinedText : extractedResponse.content;
           } else {
             reply = extractedResponse.content;
           }
           
-          // Clean up any remaining citation markers or artifacts
-          reply = reply.replace(/ã€\d+:\d+â€ [^ã€']+ã€'/g, '');
+          // Clean up any remaining citation markers
+          reply = reply.replace(/【\d+:\d+†[^】]+】/g, '');
           reply = reply.replace(/\[sandbox:.*?\]/g, '');
-          
-          // Clean up search artifacts from the response
-          reply = cleanResponseFromSearchArtifacts(reply);
-          
-          // If JSON format was requested, try to parse the response
-          if (useJsonFormat) {
-            parsedResponse = parseAssistantJsonResponse(reply);
-            if (DEBUG) {
-            console.log('Parsed JSON response:', parsedResponse);
-            }
-          }
-        } else {
-          extractedResponse = { type: 'text', content: reply };
-        }
-
-        
-
-        
-        if (DEBUG) {
-        console.log(`Thread ${currentThreadId} message analysis:`);
-        console.log(`- Total messages in thread: ${messagesRes.data.data.length}`);
-        console.log(`- Recent assistant messages: ${recentMessages.length}`);
-        console.log(`- Selected message created at: ${new Date(assistantMsg.created_at * 1000)}`);
-        console.log(`- Final response length: ${reply.length} characters`);
-        console.log('Reply extracted and cleaned successfully');
         }
       } catch (error: any) {
-        console.error('Failed to fetch messages:', error.response?.data || error.message);
-        reply = 'Failed to fetch response.';
+        console.error('Failed to fetch messages:', error);
         extractedResponse = { type: 'text', content: reply };
       }
     } else if (status === 'failed') {
@@ -1013,18 +885,12 @@ const assistantMsg = recentMessages[0] || messagesRes.data.data.find((m: any) =>
       extractedResponse = { type: 'text', content: reply };
     }
 
-    // ========================================
-    // NEW: Update thread file tracking after successful response
-    // ========================================
-    
+    // Update thread file tracking after successful response
     if (status === 'completed' && currentThreadId) {
       try {
-        // Add new files to thread context
         if (newFileIds.length > 0) {
-          // For each new file, we should get proper metadata from OpenAI
           for (const fileId of newFileIds) {
             try {
-              // Get file metadata from OpenAI API
               const fileMetadataResponse = await fetch(`https://api.openai.com/v1/files/${fileId}`, {
                 headers: {
                   'Authorization': `Bearer ${OPENAI_API_KEY}`,
@@ -1040,7 +906,6 @@ const assistantMsg = recentMessages[0] || messagesRes.data.data.find((m: any) =>
                 const metadata = await fileMetadataResponse.json();
                 filename = metadata.filename || filename;
                 fileSize = metadata.bytes || 0;
-                // Extract file type from filename extension
                 const extension = filename.toLowerCase().split('.').pop();
                 fileType = extension || 'unknown';
               }
@@ -1055,7 +920,6 @@ const assistantMsg = recentMessages[0] || messagesRes.data.data.find((m: any) =>
               
             } catch (fileError) {
               console.error(`Error processing file ${fileId}:`, fileError);
-              // Still try to add with fallback data
               await ThreadFileService.addFileToThread(
                 currentThreadId,
                 fileId,
@@ -1071,78 +935,56 @@ const assistantMsg = recentMessages[0] || messagesRes.data.data.find((m: any) =>
           }
         }
         
-        // Update usage statistics for all accessed files
-        if (allFileIds.length > 0) {
-          await ThreadFileService.updateFileUsage(currentThreadId, allFileIds);
+        if (allFileIdsUnique.length > 0) {
+          await ThreadFileService.updateFileUsage(currentThreadId, allFileIdsUnique);
           
           if (DEBUG) {
-            console.log(`Updated usage statistics for ${allFileIds.length} thread files`);
+            console.log(`Updated usage statistics for ${allFileIdsUnique.length} thread files`);
           }
         }
         
       } catch (error) {
         console.error('Error updating thread file context:', error);
-        // Don't fail the response due to tracking errors
       }
     }
 
-    // Now build the response object with the correct extracted data
-    const responseObj: any = {
+    // Get all thread files for response
+    let allThreadFiles: any[] = [];
+    try {
+      const activeFiles = await ThreadFileService.getActiveThreadFiles(currentThreadId);
+      allThreadFiles = activeFiles;
+    } catch (error) {
+      console.error('Error fetching thread files:', error);
+    }
+
+    // Build response
+    return NextResponse.json({
       reply,
-      files: extractedResponse?.files,
       threadId: currentThreadId,
-      status: 'success',
-      webSearchPerformed,
-      useJsonFormat: !!useJsonFormat
-    };
-
-    // Add parsed response if JSON format was used
-    if (useJsonFormat && parsedResponse) {
-      responseObj.parsedResponse = parsedResponse;
-    }
-
-    // Append search sources if available (in a clean format)
-    if (webSearchEnabled && searchSources.length > 0) {
-      if (useJsonFormat && parsedResponse && !parsedResponse.parsing_failed) {
-        // If we have a valid JSON response, sources are already included
-        responseObj.searchSources = searchSources;
-      } else {
-        // For non-JSON responses, append sources in markdown format
-        reply += '\n\n---\n**Sources:**\n';
-        searchSources.forEach((source, index) => {
-          reply += `${index + 1}. [${source.title}](${source.url})`;
-          if (source.score) {
-            reply += ` (${(source.score * 100).toFixed(0)}% relevance)`;
-          }
-          reply += '\n';
-        });
-        responseObj.reply = reply;
-        responseObj.searchSources = searchSources;
-      }
-    }
-
-    return NextResponse.json(responseObj);
+      //messageId: extractedResponse?.messageId,
+      files: extractedResponse?.files || [],
+      threadFiles: allThreadFiles,
+    });
 
   } catch (error: any) {
     if (DEBUG) {
-    console.error('API Error:', error.response?.data || error.message);
+      console.error('API Error:', error.response?.data || error.message);
     }
     
-    let errorMessage = 'Unable to reach assistant.';
+    let errorMessage = 'Unable to reach assistant. Please check your connection and try again.';
     
-    if (error.response?.data?.error?.message) {
-      errorMessage = error.response.data.error.message;
-    } else if (error.response?.status === 401) {
-      errorMessage = 'Invalid API key.';
+    if (error.response?.status === 401) {
+      errorMessage = 'Invalid API credentials. Please check your OpenAI API key.';
+    } else if (error.response?.status === 429) {
+      errorMessage = 'Rate limit exceeded. Please wait a moment and try again.';
     } else if (error.response?.status === 404) {
-      errorMessage = 'Assistant not found.';
-    } else if (error.message) {
-      errorMessage = error.message;
+      errorMessage = 'Assistant not found. Please check your assistant ID.';
     }
-
+    
     return NextResponse.json(
       { error: errorMessage },
-      { status: 500 }
+      { status: error.response?.status || 500 }
     );
   }
 }
+

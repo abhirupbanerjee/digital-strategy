@@ -23,14 +23,15 @@ export const WebSearchToggle: React.FC<WebSearchToggleProps> = ({
             ? 'bg-blue-600 text-white' 
             : 'bg-gray-200 text-gray-700'
         }`}
+        title="When enabled, AI will search the web when it needs current information"
       >
-        🌐 Web Search {enabled && '✓'}
+        🌐 Allow AI Web Search {enabled && '✓'}
       </button>
     );
   }
 
   return (
-    <label className="flex items-center cursor-pointer">
+    <label className="flex items-center cursor-pointer" title="When enabled, AI will search the web when it needs current information">
       <input
         type="checkbox"
         checked={enabled}
@@ -43,9 +44,9 @@ export const WebSearchToggle: React.FC<WebSearchToggleProps> = ({
         ) : (
           <span>🌐</span>
         )}
-        Web Search
+        Allow AI Web Search
         {enabled && (
-          <span className="text-xs text-green-600 font-semibold">ON</span>
+          <span className="text-xs text-green-600 font-semibold ml-1">✓</span>
         )}
       </span>
     </label>
